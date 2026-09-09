@@ -1,18 +1,28 @@
 # Backend Development 101
 
-A ground-up introduction to backend development: the vocabulary, how to think about system
-design, and FastAPI fundamentals.
+I wrote this for the MUNSoc tech team. It's the guide I wish someone had handed me before
+I started building MUNDRA, our delegate management backend.
+
+If you know basic Python (variables, functions, loops, maybe classes) but have never built
+a backend, this is aimed at you. I define every term the first time it shows up, because
+the jargon was honestly the hardest part for me at the start.
+
+Most of the examples come from MUNDRA itself rather than made up toy code. That's partly
+because real examples are more useful, and partly because most of the mistakes in here are
+ones I actually made while building it.
+
+---
 
 ## Table of contents
 
 1. [What is a backend, actually?](#1-what-is-a-backend-actually)
-2. [Glossary — the words you'll hear constantly](#2-glossary--the-words-youll-hear-constantly)
-3. [Thinking in systems: how to design a backend](#3-thinking-in-systems-how-to-design-a-backend)
+2. [Glossary: the words you'll hear constantly](#2-glossary-the-words-youll-hear-constantly)
+3. [Thinking in systems](#3-thinking-in-systems)
 4. [FastAPI fundamentals](#4-fastapi-fundamentals)
-5. [CRUD in FastAPI, one operation at a time](#5-crud-in-fastapi-one-operation-at-a-time)
-6. [`app` vs `router`: what they are and when to use each](#6-app-vs-router-what-they-are-and-when-to-use-each)
+5. [CRUD, one operation at a time](#5-crud-one-operation-at-a-time)
+6. [app vs router](#6-app-vs-router)
 7. [Quick reference](#7-quick-reference)
-8. [Building your own backend: practices that matter](#8-building-your-own-backend-practices-that-matter)
+8. [How I'd structure your first backend](#8-how-id-structure-your-first-backend)
 9. [Case study: designing a system from scratch](#9-case-study-designing-a-system-from-scratch)
 10. [Your turn](#10-your-turn)
 11. [Further reading](#11-further-reading)
@@ -21,15 +31,17 @@ design, and FastAPI fundamentals.
 
 ## 1. What is a backend, actually?
 
-Every app you've used has (at least) two halves:
+Every app you've used has at least two halves.
 
-- **Frontend** — what you see and tap. A login screen, the buttons, the text fields.
-- **Backend** — the thing the frontend talks to over the internet to actually *do* anything.
-  Check a password. Save a new delegate. Look up who's registered for a committee.
+The **frontend** is what you see and tap. The login screen, the buttons, the text fields.
 
-The frontend can't be trusted to do any of this itself — it's running on a stranger's
-phone, and anyone can tamper with it. The backend is the part *you* control, running on
-a server you own, that decides what's actually allowed to happen.
+The **backend** is the thing the frontend talks to over the internet to actually do
+anything. Check a password. Save a new delegate. Look up who's registered for a committee.
+
+The reason we can't just do all of this in the app is trust. The frontend runs on a
+stranger's phone and anyone can tamper with it. The backend is the part we control,
+running on a server we own, and it's the thing that decides what's actually allowed to
+happen.
 
 ```mermaid
 sequenceDiagram
@@ -44,127 +56,129 @@ sequenceDiagram
     API-->>App: {access_token: "eyJ..."}
 ```
 
-That round trip — app asks, backend decides, database stores, backend answers — is
-*the* pattern. Everything in this document is filling in detail around that one loop.
+That round trip is the whole pattern. App asks, backend decides, database stores, backend
+answers. Everything else in this doc is just detail around that one loop.
 
-**A backend's three jobs, always:**
-1. **Talk to the outside world** — accept requests, send back responses. (This is the *API* layer.)
-2. **Enforce the rules** — is this password right? Is this delegate allowed to see this data? (*Business logic*.)
-3. **Remember things** — save data so it's still there after the request is over. (The *database*.)
+A backend has three jobs, always:
+
+1. Talk to the outside world. Accept requests, send back responses. This is the API layer.
+2. Enforce the rules. Is this password right? Can this delegate see this data? This is the
+   business logic.
+3. Remember things. Save data so it survives a restart. That's the database.
 
 ---
 
-## 2. Glossary — the words you'll hear constantly
+## 2. Glossary: the words you'll hear constantly
 
-Read this once, then use it as a reference. Terms are grouped, not alphabetical, because
-they build on each other.
+Read this once, then come back to it. I grouped the terms instead of alphabetising them
+because they build on each other.
 
 ### The network conversation
 
-| Term | Plain-English meaning |
+| Term | What it means |
 |---|---|
-| **Client** | Whatever is making the request — a mobile app, a browser, `curl`, Swagger UI. Not always a "user"; could be another server. |
-| **Server** | The program listening for requests and answering them. For a FastAPI project, that's usually `uvicorn` running your app. |
-| **Request** | One message from client to server: "please do this." Has a method, a path, headers, and sometimes a body. |
-| **Response** | The server's answer: a status code, headers, and usually a body (often JSON). |
-| **HTTP** | The language requests and responses are written in. Almost everything on the web speaks it. |
-| **Endpoint** (a.k.a. **route**) | One specific "thing you can ask the server to do" — a combination of a path and a method. `POST /login` is one endpoint. `GET /login` (if it existed) would be a *different* endpoint. |
-| **Method** | The *verb* of a request — what kind of action it is. See the table below. |
-| **Path** | The *noun* of a request — which resource. `/delegates/42` means "the delegate with id 42." |
-| **Status code** | A 3-digit number in the response saying what happened. `200` = OK. `404` = not found. `500` = the server broke. Full breakdown below. |
-| **Header** | Metadata attached to a request or response, separate from the actual content. `Authorization: Bearer <token>` is a header — it's *about* the request, not the request's subject. |
-| **Body** (a.k.a. **payload**) | The actual content being sent — the delegate's name, the password, the JSON blob. Not every request has one (a `GET` usually doesn't). |
-| **JSON** | *JavaScript Object Notation* — the near-universal text format for structured data, e.g. `{"email": "ada@example.com", "verified": true}`. If you've written a Python dict, you already know JSON's shape. |
+| **Client** | Whatever is making the request. Our mobile app, a browser, `curl`, the Swagger page. Not always a person, it could be another server. |
+| **Server** | The program listening for requests and answering them. For us that's `uvicorn` running the app. |
+| **Request** | One message from client to server saying "please do this". It has a method, a path, headers, and sometimes a body. |
+| **Response** | The answer. A status code, headers, and usually a body (normally JSON). |
+| **HTTP** | The language requests and responses are written in. Nearly everything on the web speaks it. |
+| **Endpoint** (or **route**) | One specific thing you can ask the server to do. It's a path plus a method together. `POST /login` is one endpoint, `GET /login` would be a completely different one. |
+| **Method** | The verb of the request. Table below. |
+| **Path** | The noun. `/delegates/42` means "the delegate with id 42". |
+| **Status code** | A 3 digit number saying what happened. `200` is fine, `404` is not found, `500` means we broke something. |
+| **Header** | Metadata attached to the request, separate from the content. `Authorization: Bearer <token>` is a header. It's *about* the request rather than being the request's subject. |
+| **Body** (or **payload**) | The actual content being sent. The delegate's name, the password, the JSON blob. A `GET` usually doesn't have one. |
+| **JSON** | The standard text format for structured data, like `{"email": "ada@example.com", "verified": true}`. If you've written a Python dict you already know the shape. |
 
-### HTTP methods — the verbs
+### HTTP methods
 
 | Method | Means | Example |
 |---|---|---|
-| `GET` | Read something. Never changes data. | `GET /delegates/me` — fetch my profile |
-| `POST` | Create something new. | `POST /register` — create an account |
-| `PATCH` | Update *part* of something. | `PATCH /delegates/{id}` — change one field |
-| `PUT` | Replace something *entirely*. | `PUT /delegates/{id}` — overwrite the whole record |
-| `DELETE` | Remove something. | `DELETE /account` — delete a login |
+| `GET` | Read something. Never changes data. | `GET /delegates/me` to fetch my profile |
+| `POST` | Create something new. | `POST /register` to make an account |
+| `PATCH` | Update part of something. | `PATCH /delegates/{id}` to change one field |
+| `PUT` | Replace something entirely. | `PUT /delegates/{id}` to overwrite the record |
+| `DELETE` | Remove something. | `DELETE /account` |
 
-### Status codes — the vocabulary of "what happened"
+### Status codes
 
-| Range | Category | Common ones you'll actually see |
+| Range | Whose fault | The ones you'll actually see |
 |---|---|---|
-| `2xx` | Success | `200` OK · `201` Created (a `POST` that made something new) |
-| `4xx` | **The client's** fault | `400` bad request · `401` not logged in · `403` logged in but not allowed · `404` doesn't exist · `409` conflict (e.g. "already registered") |
-| `5xx` | **The server's** fault | `500` something broke on our end that shouldn't have |
+| `2xx` | Nobody, it worked | `200` OK, `201` Created (a `POST` that made something) |
+| `4xx` | The client's | `400` bad request, `401` not logged in, `403` logged in but not allowed, `404` doesn't exist, `409` conflict (like "already registered") |
+| `5xx` | Ours | `500` something broke that shouldn't have |
 
-The 4xx/5xx split matters: a `404` means "you asked correctly, that thing just isn't
-there." A `500` means "our code has a bug." Confusing the two makes debugging much harder
-— always check whether an error is a `4xx` (fix your request) or `5xx` (file a bug) first.
+The 4xx vs 5xx split matters more than it looks. A `404` means you asked correctly and the
+thing just isn't there. A `500` means our code has a bug. When something breaks, the first
+thing I check is which of the two it is, because it tells me whether to go fix my request
+or go read the server logs.
 
-### The parts of a backend
+### Parts of a backend
 
-| Term | Plain-English meaning |
+| Term | What it means |
 |---|---|
-| **API** (*Application Programming Interface*) | The full set of endpoints a backend exposes — the "menu" of things a client can ask it to do. |
-| **REST** | A common *style* of designing APIs, where each endpoint represents a "resource" (a delegate, a room) and the HTTP method says what to do to it. `GET /delegates/{id}`, `PATCH /delegates/{id}`, `DELETE /delegates/{id}` — same resource, three verbs. |
-| **Router** | A named, importable group of related endpoints — e.g. one file holding every delegate-related endpoint. Covered in depth in [Section 6](#6-app-vs-router-what-they-are-and-when-to-use-each). |
-| **Middleware** | Code that runs on *every* request, before it reaches your endpoint — logging, rate limiting, CORS. |
-| **Dependency injection** | A pattern where a route *declares* something it needs (e.g. "the current logged-in user"), and the framework figures out how to provide it before your function runs. In FastAPI this is the `Depends(...)` you'll see everywhere. |
-| **Database** | Where data lives *permanently* — survives a server restart, unlike a Python variable. |
-| **ORM** (*Object-Relational Mapper*) | A library that lets you work with database rows as Python objects instead of writing raw SQL. SQLAlchemy is the common Python one. |
-| **Schema / Model** | A definition of the *shape* of some data — what fields it has, what types they are. A project usually has **two different kinds**: Pydantic models describing the *API's* shape, and ORM models describing the *database's* shape. They are not the same thing, and conflating them is one of the most common sources of confusion for beginners. |
-| **Migration** | A recorded, ordered change to the database's structure (add a column, add a table). Alembic is the standard tool for this in SQLAlchemy projects. |
+| **API** | The full set of endpoints a backend exposes. The menu of things a client can ask for. |
+| **REST** | A style of designing APIs where each endpoint is a "resource" and the method says what to do to it. `GET /delegates/{id}`, `PATCH /delegates/{id}`, `DELETE /delegates/{id}`. Same resource, three verbs. |
+| **Router** | A named group of related endpoints, usually one file. Section 6 goes into this properly. |
+| **Middleware** | Code that runs on every request before it reaches your endpoint. Logging, rate limiting, CORS. |
+| **Dependency injection** | Where a route declares something it needs ("the current logged in user") and the framework works out how to supply it before your function runs. In FastAPI this is `Depends(...)`. |
+| **Database** | Where data lives permanently. Survives a restart, unlike a Python variable. |
+| **ORM** | Object Relational Mapper. A library letting you treat database rows as Python objects instead of writing SQL by hand. SQLAlchemy is the usual one in Python. |
+| **Schema / Model** | A definition of the shape of some data. Which fields, what types. You normally end up with **two different kinds**: Pydantic models for the API's shape, ORM models for the database's shape. They are not the same thing and mixing them up confused me for a solid week. |
+| **Migration** | A recorded change to the database structure, like adding a column. Alembic is the tool we use. |
 
-### Auth — the most jargon-dense corner
+### Auth
 
-| Term | Plain-English meaning |
+| Term | What it means |
 |---|---|
-| **Authentication** ("authn") | *Who are you?* Proving identity — usually email + password. |
-| **Authorization** ("authz") | *What are you allowed to do?* Even once we know who you are, maybe you can't see someone else's data. |
-| **Token** | A piece of proof, issued after login, that says "this request comes from an already-verified user" — so you don't have to send your password on every single request. |
-| **JWT** (*JSON Web Token*) | A specific, very common token format. It's a signed blob of JSON — the server can verify nobody tampered with it, without even needing to check a database. |
-| **Bearer token** | The convention of sending a token in a request header: `Authorization: Bearer <token>`. "Bearer" means "whoever holds this token is treated as authenticated" — like a subway ticket, not a photo ID. |
-| **Hashing** | A one-way scramble. `hash("password123")` always gives the same output, but you can't reverse it back to `"password123"`. Passwords are stored hashed so that even *we* can't read them. |
+| **Authentication** (authn) | Who are you? Proving identity, usually with email and password. |
+| **Authorization** (authz) | What are you allowed to do? We might know who you are and still not let you see someone else's data. |
+| **Token** | A piece of proof handed out after login so you don't have to send your password on every single request. |
+| **JWT** | JSON Web Token. A specific token format. It's a signed blob of JSON, so the server can check nobody tampered with it without even hitting the database. |
+| **Bearer token** | The convention of sending a token as `Authorization: Bearer <token>`. "Bearer" means whoever holds it gets treated as authenticated, like a metro ticket rather than a photo ID. |
+| **Hashing** | A one way scramble. `hash("password123")` always gives the same output but you can't reverse it. We store passwords hashed so that even we can't read them. |
 
 ---
 
-## 3. Thinking in systems: how to design a backend
+## 3. Thinking in systems
 
-Before writing any code, a system-design approach forces you to answer four questions,
-**in this order**. Skipping ahead to "what code do I write" before answering these is the
-single most common mistake.
+Before writing code I now force myself to answer four questions in order. I didn't do this
+on the first version of MUNDRA and I paid for it in rewrites.
 
-### Step 1 — What are the *entities*?
+### Step 1: what are the entities?
 
-An entity is a "thing" your system needs to remember. Nouns, not verbs. For MUNDRA:
-a **Delegate**, a **User** (login credentials), a **Room**, a **Committee**.
+An entity is a thing your system has to remember. Nouns, not verbs. For MUNDRA that's a
+**Delegate**, a **User** (login credentials), a **Room**, a **Committee**.
 
-> Write these down as a plain list before anything else. If you can't name the nouns,
-> you don't understand the problem yet.
+Write these on paper before anything else. If you can't name the nouns, you don't
+understand the problem yet, and no amount of typing will fix that.
 
-### Step 2 — What can happen to each entity?
+### Step 2: what can happen to each one?
 
-For every entity, what operations does the system need? Usually some subset of
-**Create, Read, Update, Delete** (CRUD — see Section 5). Not every entity needs all four:
-MUNDRA's room allocations are *read-only* from the API's side — nobody `POST`s a new room
-through the API, because rooms get decided once in a planning meeting and rarely change.
+For each entity, what does the system actually need to do? Usually some subset of Create,
+Read, Update, Delete (see section 5). Not everything needs all four. Our room allocations
+are read only from the API's side, nobody creates a room over HTTP, because rooms get
+decided once in a planning meeting and barely change after that.
 
-### Step 3 — Who's allowed to do what?
+### Step 3: who's allowed to do what?
 
-This is where authentication and authorization show up. A delegate can update *their own*
-profile but not someone else's. An admin can see everyone's. Write this as a table before
-coding it:
+This is where auth shows up. A delegate can edit their own profile but not someone else's.
+An admin can see everyone. I write it as a table before I write any code:
 
 | Action | Delegate | Admin |
 |---|---|---|
-| View own profile | ✅ | ✅ |
-| View another delegate's profile | ❌ | ✅ |
-| Update own profile | ✅ | ✅ |
-| List all delegates | ❌ | ✅ |
+| View own profile | yes | yes |
+| View another delegate's profile | no | yes |
+| Update own profile | yes | yes |
+| List all delegates | no | yes |
 
-Every ❌ in that table is a permission check you'll need to write. Every row you *didn't*
-think of is a security hole you'll ship.
+Every "no" in that table is a permission check you have to write. Every row you forget to
+think about is a hole you ship.
 
-### Step 4 — Draw the flow before you write a line of code
+### Step 4: draw the flow first
 
-For anything nontrivial, sketch the request lifecycle. Here's registration in MUNDRA:
+For anything non trivial I sketch the request lifecycle before coding. Here's registration
+in MUNDRA:
 
 ```mermaid
 flowchart TD
@@ -179,25 +193,24 @@ flowchart TD
     H --> I["201 Created"]
 ```
 
-Notice this flow answers a design question that isn't obvious from the entity list alone:
-*why are `Delegate` and `User` two separate things?* Because a `Delegate` can exist —
-pre-registered by an admin, say — *before* anyone ever creates login credentials for them.
-Modeling those as one entity would make "an admin pre-registers someone" impossible to
-represent cleanly.
+Drawing this is what made me realise why `Delegate` and `User` have to be separate tables.
+A delegate can exist before anyone makes login credentials for them, for example when an
+admin pre registers someone. If I'd modelled those as one thing, "admin pre registers a
+delegate" would have been impossible to represent without a fake password.
 
-**This is what system design actually is** — not memorizing patterns, but asking "what
-distinctions does my data actually need to make?"
+That's what system design actually is. Not memorising patterns, just asking what
+distinctions your data genuinely needs to make.
 
-### The layered mental model
+### The three layers
 
-Once you've answered the four questions, the code almost always falls into the same three
-layers, regardless of framework or language:
+Once you've answered those, the code tends to fall into the same three layers no matter
+what framework you use:
 
 ```mermaid
 flowchart LR
     subgraph API["API layer"]
         direction TB
-        A1["Receives the request<br/>Validates its shape<br/>Decides the HTTP response"]
+        A1["Receives the request<br/>Validates its shape<br/>Decides the response"]
     end
     subgraph Logic["Business logic"]
         direction TB
@@ -205,32 +218,32 @@ flowchart LR
     end
     subgraph Data["Data layer"]
         direction TB
-        D1["Reads/writes the database<br/>Knows nothing about HTTP"]
+        D1["Reads and writes the database<br/>Knows nothing about HTTP"]
     end
     API --> Logic --> Data
 ```
 
-The key discipline: **the data layer should have no idea HTTP exists.** Its functions
-return data or raise plain Python exceptions — it's the API layer's job to translate that
-into a status code. Keep that boundary clean and you can test your logic without spinning
-up a server, and swap your database without touching your routes.
+The bit I'd emphasise: the data layer should have no idea HTTP exists. Its functions
+return data or raise a normal Python exception, and it's the API layer's job to turn that
+into a status code. Keep that line clean and you can test your logic without starting a
+server, and swap your database without touching your routes.
 
 ---
 
 ## 4. FastAPI fundamentals
 
-**FastAPI** is a Python framework for building APIs. Three things make it worth learning first:
+FastAPI is the Python framework we use to build the API. Three reasons it's worth learning
+first:
 
-1. **You describe the shape of your data with normal Python type hints, and it validates
-   requests automatically.** Get the type wrong, and the client gets a clear `422` error
-   before your function even runs — you don't write that validation by hand.
-2. **It generates interactive documentation for free** — a browsable Swagger UI listing
-   every endpoint, every field, every response shape, always in sync with the real code
-   because it's *generated from* the real code.
-3. **It's built on `async`**, so it can handle many requests at once efficiently — though
-   you don't need to understand `async`/`await` deeply to get started.
+1. You describe your data with normal Python type hints and it validates incoming requests
+   for you. Send the wrong type and the client gets a clear `422` before your function even
+   runs. You never write that validation by hand.
+2. You get interactive docs for free. That's the Swagger page, and because it's generated
+   from the real code it can't go stale.
+3. It's built on async, so it handles a lot of requests at once. You don't need to
+   understand async deeply to start.
 
-### The smallest possible FastAPI app
+### The smallest possible app
 
 ```python
 from fastapi import FastAPI
@@ -242,20 +255,19 @@ def read_root():
     return {"message": "hello"}
 ```
 
-Run it with `uvicorn main:app --reload`, and you have a working API. Four things are
-happening:
+Run it with `uvicorn main:app --reload` and you have a working API. Four things happening:
 
-- `app = FastAPI()` creates *the* application — the thing `uvicorn` actually runs.
-- `@app.get("/")` is a **decorator** — it registers the function below it to handle
-  `GET` requests to path `/`. This pairing (decorator + function) is called a
-  **path operation**, and it's the fundamental unit of a FastAPI app.
-- The function name (`read_root`) can be anything — it's never called directly by you.
-- Whatever the function `return`s gets converted to JSON automatically. Return a dict,
-  get a JSON object back.
+- `app = FastAPI()` creates the application, the thing uvicorn actually runs.
+- `@app.get("/")` is a decorator. It registers the function underneath to handle `GET`
+  requests to `/`. This pairing is called a path operation and it's the basic unit of the
+  whole framework.
+- The function name doesn't matter, you never call it yourself.
+- Whatever you return gets turned into JSON automatically. Return a dict, get a JSON
+  object.
 
-### Path parameters vs. query parameters vs. body
+### Path params vs query params vs body
 
-This trips people up constantly, so learn it as one comparison:
+This one took me embarrassingly long to internalise, so learn it as one comparison:
 
 ```python
 @app.get("/delegates/{id}")           # path parameter
@@ -271,18 +283,17 @@ def register(user: User):              # request body
     ...
 ```
 
-| Kind | Where it lives | Example | When to use it |
+| Kind | Where it goes | Example | Use it for |
 |---|---|---|---|
-| **Path parameter** | Part of the URL path itself, in `{braces}` | `/delegates/42` → `id="42"` | Identifying *which* specific resource |
-| **Query parameter** | After a `?`, as `key=value` pairs | `/delegates?format=csv` → `format="csv"` | Optional filters, formatting, pagination |
-| **Body** | The JSON payload of the request | `{"email": "...", "password": "..."}` | Sending a chunk of structured data — almost always on `POST`/`PATCH` |
+| **Path param** | In the URL path, in braces | `/delegates/42` gives `id="42"` | Saying *which* specific thing |
+| **Query param** | After a `?` as key=value | `/delegates?format=csv` gives `format="csv"` | Optional filters, formatting, paging |
+| **Body** | The JSON payload | `{"email": "...", "password": "..."}` | Sending a chunk of structured data, nearly always on POST or PATCH |
 
-FastAPI knows which is which **purely from how you declare the function** — a parameter
-matching a `{name}` in the path is a path parameter; a parameter typed as a Pydantic model
-is the body; anything else simple (`str`, `int`, `bool`) becomes a query parameter.
-No separate configuration needed.
+FastAPI works out which is which purely from how you write the function signature. A
+parameter matching a `{name}` in the path is a path param, a parameter typed as a Pydantic
+model is the body, anything else simple becomes a query param. There's no config to write.
 
-### Pydantic models: describing shapes
+### Pydantic models
 
 ```python
 from pydantic import BaseModel, EmailStr
@@ -294,26 +305,22 @@ class User(BaseModel):
     password: str
 ```
 
-This isn't a database table — it's a **shape description**. When a route declares
-`user: User`, FastAPI:
+This is not a database table. It's a description of a shape. When a route says
+`user: User`, FastAPI reads the JSON body, checks every field is present and the right
+type, and if anything's wrong it sends back a `422` naming the exact field that failed.
+If everything's fine you get a real `User` object with autocomplete.
 
-1. Reads the incoming JSON body
-2. Checks every field is present and the right type
-3. If anything's wrong, sends back a `422` with exactly which field failed — automatically
-4. If everything's right, hands you a real `User` object with autocomplete and type-checking
-
-This is the single biggest quality-of-life difference from writing raw HTTP handlers by
-hand: describe the shape once, and validation, error messages, and docs all come for free.
+Describing the shape once and getting validation, error messages and docs out of it is the
+single biggest reason I'd pick FastAPI for a first backend.
 
 ---
 
-## 5. CRUD in FastAPI, one operation at a time
+## 5. CRUD, one operation at a time
 
-**CRUD** = **C**reate, **R**ead, **U**pdate, **D**elete — the four things you can do to a
-piece of data. Almost every resource in almost every backend eventually needs some subset
-of these four. Here's each one as a minimal pattern.
+CRUD is Create, Read, Update, Delete. Four things you can do to a piece of data. Almost
+every resource in almost every backend needs some subset of them.
 
-### Create — `POST`
+### Create, with POST
 
 ```python
 @router.post("/delegates", status_code=201)
@@ -322,10 +329,10 @@ def create_delegate(delegate: DelegateCreate):
     return new_delegate
 ```
 
-- `status_code=201` — the convention for "a `POST` that successfully made something new."
-- The request body is validated against `DelegateCreate` before this function even runs.
+`status_code=201` is the convention for a POST that successfully made something new. The
+body gets validated against `DelegateCreate` before the function runs.
 
-### Read — `GET`
+### Read, with GET
 
 ```python
 @router.get("/delegates/{id}")
@@ -336,11 +343,11 @@ def get_delegate(id: str):
     return delegate
 ```
 
-- Reads never change data. If a `GET` request modifies something, that's a design smell.
-- `raise HTTPException(...)` is how you send back a non-200 response — FastAPI catches it
-  and turns it into the right status code and JSON body.
+Reads never change data. If a GET modifies something, that's a design smell.
+`raise HTTPException(...)` is how you return anything other than a 200, FastAPI catches it
+and builds the right response.
 
-### Update — `PATCH`
+### Update, with PATCH
 
 ```python
 @router.patch("/delegates/{id}")
@@ -353,12 +360,11 @@ def update_delegate(id: str, firstname: str = ""):
     return database.update_delegate_by_id(id, delegate)
 ```
 
-- `PATCH` means *partial* update — you only send the fields you want to change.
-  (`PUT` means "replace the whole thing.")
-- Notice the pattern: fetch first, check it exists, *then* modify. Never blindly write to
-  something you haven't confirmed is there.
+PATCH is a partial update, you only send the fields you want changed. PUT means replace
+the whole thing. Note the order here: fetch, check it exists, then modify. Don't write to
+something you haven't confirmed is there.
 
-### Delete — `DELETE`
+### Delete
 
 ```python
 @router.delete("/delegates/{id}", status_code=200)
@@ -370,46 +376,44 @@ def delete_delegate(id: str):
     return {"message": "Delegate deleted"}
 ```
 
-- Same fetch-check-act pattern as update.
-- **Deciding what a `DELETE` actually removes is a real design choice.** In MUNDRA,
-  `DELETE /account` deletes only the *login credentials* — not the delegate's conference
-  registration. Someone can delete their account without erasing the fact that they
-  attended. That's a deliberate product decision encoded in code, and the kind of thing
-  worth discussing before implementing rather than after.
+Same fetch, check, act shape as update.
 
-### The shape they all share
+Deciding what a delete actually removes is a real design decision and worth arguing about
+before you build it. In MUNDRA, `DELETE /account` only removes the login credentials, not
+the delegate's conference registration. Someone can delete their account without us losing
+the record that they attended. That was deliberate, and it's the kind of thing that's
+painful to change later.
 
-Every one of these follows the same skeleton:
+### They all have the same skeleton
 
 ```
-1. Receive input (path param / query param / body)
-2. Fetch anything you need to check first
-3. Check it's allowed (does it exist? are you permitted?)
-4. Do the actual work
-5. Return a response with the right status code
+1. Take the input (path param, query param, body)
+2. Fetch whatever you need to check
+3. Check it's allowed (does it exist, are you permitted)
+4. Do the work
+5. Return with the right status code
 ```
 
-Once you can see that skeleton under any endpoint, reading unfamiliar backend code gets
-much faster — you're just identifying which lines are which step.
+Once you can see that shape under any endpoint, reading unfamiliar backend code gets a lot
+faster. You're just working out which lines are which step.
 
 ---
 
-## 6. `app` vs `router`: what they are and when to use each
+## 6. app vs router
 
-This is the FastAPI-specific question people ask most, so it gets its own section.
+This is the question I get asked most, so it gets its own section.
 
-### `FastAPI()` — the app
+### FastAPI() is the app
 
 ```python
 app = FastAPI(title="MUNDRA")
 ```
 
-There is **exactly one** of these per project. It's the actual thing `uvicorn` runs. It
-holds the *global* configuration: the title, whether docs are enabled, what middleware
-runs on every request, and — crucially — the final assembled list of every endpoint in
-the entire system.
+There's exactly one of these in a project. It's what uvicorn runs. It holds the global
+config: the title, whether docs are on, what middleware runs on every request, and the
+final assembled list of every endpoint in the system.
 
-### `APIRouter()` — the router
+### APIRouter() is a router
 
 ```python
 # routers/delegates.py
@@ -420,10 +424,9 @@ def get_current_delegate(...):
     ...
 ```
 
-An `APIRouter` looks and behaves almost identically to `app` — same decorators
-(`@router.get`, `@router.post`, etc.), same rules. **The only difference is that a router
-isn't runnable by itself.** It's a portable *bag of endpoints* that has to be attached to
-the real `app` before it does anything:
+A router looks almost identical to the app. Same decorators, same rules. The one real
+difference is that a router can't run on its own. It's a portable bag of endpoints that
+has to be attached to the actual app before it does anything:
 
 ```python
 # main.py
@@ -432,199 +435,206 @@ from routers.delegates import router as delegates_router
 app.include_router(delegates_router, prefix="/delegates", tags=["Delegates"])
 ```
 
-That one line does two useful things:
+That line is doing two things worth knowing about:
 
-- **`prefix="/delegates"`** — every path inside that router gets `/delegates` stuck on the
-  front automatically. The route defined as `@router.get("/me")` becomes `GET /delegates/me`
-  for real. The router file never has to repeat `/delegates` on every single line.
-- **`tags=["Delegates"]`** — cosmetic but genuinely useful: it groups these endpoints
-  together in the Swagger docs instead of one long undifferentiated list.
+`prefix="/delegates"` sticks `/delegates` on the front of every path inside that router.
+The route written as `@router.get("/me")` actually becomes `GET /delegates/me`. So the
+router file never repeats `/delegates` on every line.
 
-### Why bother splitting at all?
+`tags=["Delegates"]` is cosmetic but useful. It groups those endpoints together on the
+Swagger page instead of leaving one long undifferentiated list.
 
-Because a real backend accumulates dozens of endpoints, and one file holding all of them
-becomes unreadable and impossible to review in a pull request. MUNDRA used to be a single
-850-line `app.py`. It's now a 40-line `main.py` plus seven small `routers/*.py` files, each
-focused on one resource:
+### Why split at all
+
+Because a real backend piles up endpoints fast and one file holding all of them becomes
+impossible to read or review. MUNDRA was a single 850 line `app.py` for a while and it was
+genuinely painful to work in. It's now a 40 line `main.py` plus seven small router files:
 
 ```
-main.py                    ← creates the app, includes every router
+main.py                    creates the app, includes every router
 routers/
-    auth.py                ← register, login, refresh, logout
-    delegates.py           ← delegate profile CRUD
-    mumbaimun.py           ← conference registration
-    qr.py, food.py         ← QR codes, meal check-in
-    admin.py               ← admin-only utilities
-    dynamic_data.py        ← static JSON data
+    auth.py                register, login, refresh, logout
+    delegates.py           delegate profile CRUD
+    mumbaimun.py           conference registration
+    qr.py, food.py         QR codes, meal check in
+    admin.py               admin only utilities
+    dynamic_data.py        static JSON data
 ```
 
-Nothing about *what the API does* changed — only how the code is organized. But now "where
-do I add a login-related endpoint?" has an obvious answer, and two people can work on
-different features without fighting over the same file.
+Nothing about what the API does changed. Only where the code lives. But now "where do I
+add a login endpoint" has an obvious answer, and two people can work on different features
+without fighting over the same file.
 
-### The rule of thumb
+### Rule of thumb
 
 | Situation | Use |
 |---|---|
-| Wiring the whole application together — title, middleware, which routers exist | `app`, in `main.py`, and **only** there |
-| Defining endpoints for a specific resource (delegates, rooms, auth...) | A `router`, in its own file under `routers/` |
-| A handful of endpoints in a genuinely tiny prototype | `app` directly is fine — don't build a `routers/` structure for a 3-endpoint toy. Split it out once it grows past one screenful of code. |
+| Wiring the app together: title, middleware, which routers exist | `app`, in `main.py`, and only there |
+| Defining endpoints for a specific resource | a `router`, in its own file under `routers/` |
+| A tiny prototype with three endpoints | just use `app` directly. Don't build a routers folder for a toy. Split once it outgrows one screen. |
 
-**The mental shortcut:** `app` is the *building*. A `router` is *one floor of offices* in
-it — organized, self-contained, and pointless without the building around it.
+The way I think about it: `app` is the building, a `router` is one floor of offices in it.
+Organised, self contained, and useless without the building around it.
 
 ---
 
 ## 7. Quick reference
 
-| I want to... | Use |
+| I want to | Use |
 |---|---|
-| Get one thing by its ID | `GET /resource/{id}` — path parameter |
-| Get a filtered/formatted list | `GET /resource?filter=value` — query parameter |
-| Create something | `POST /resource` — body, `status_code=201` |
-| Change part of something | `PATCH /resource/{id}` — body with optional fields |
+| Get one thing by id | `GET /resource/{id}`, path param |
+| Get a filtered list | `GET /resource?filter=value`, query param |
+| Create something | `POST /resource`, body, `status_code=201` |
+| Change part of something | `PATCH /resource/{id}` |
 | Remove something | `DELETE /resource/{id}` |
-| Describe an incoming JSON shape | A Pydantic `BaseModel` |
-| Require login on a route | `Depends(get_current_user)` as a function parameter |
-| Group related endpoints | `APIRouter()` in its own file under `routers/` |
-| Wire the whole app together | `FastAPI()` — once, in `main.py` |
+| Describe incoming JSON | a Pydantic `BaseModel` |
+| Require login on a route | `Depends(get_current_user)` as a parameter |
+| Group related endpoints | `APIRouter()` in its own file |
+| Wire the app together | `FastAPI()`, once, in `main.py` |
 | Return an error | `raise HTTPException(status_code=..., detail="...")` |
 
 ---
 
-## 8. Building your own backend: practices that matter
+## 8. How I'd structure your first backend
 
-### The order to build things in
+### The order I build things in now
 
-Beginners tend to write fifteen endpoints, then discover their database connection was
-misconfigured the whole time. Build **depth before breadth** — get one endpoint working
-end to end, then repeat.
+My first attempt at this went badly. I wrote about fifteen endpoints, then found out my
+database connection had been misconfigured the entire time and half of what I'd written
+had to change. So: build depth before breadth. Get one endpoint working end to end, then
+repeat.
 
-| # | Build this | Why it comes here |
+| # | Build | Why here |
 |---|---|---|
-| 1 | **The entity list, on paper** | No code. If you can't name the nouns, code won't rescue you. (Section 3, Step 1.) |
-| 2 | **`config.py`** | Reads env vars. Everything else needs settings — the DB URL, the secret key. |
-| 3 | **`database.py`** | The connection and session setup. Nothing touches data without it. |
-| 4 | **`db_models.py`** | Your tables, as Python classes. |
-| 5 | **Your first migration** | `alembic revision --autogenerate` then `alembic upgrade head`. Now the tables physically exist. |
-| 6 | **`models.py`** | The Pydantic shapes your API accepts and returns. |
-| 7 | **`main.py` + one router + ONE endpoint** | The whole pipe, end to end. Do not skip this. |
-| 8 | **Everything else** | Now that the pipe works, adding endpoints is repetitive rather than risky. |
+| 1 | The entity list, on paper | No code yet. If you can't name the nouns, code won't save you. |
+| 2 | `config.py` | Reads your env vars. Everything else needs settings, the DB url, the secret key. |
+| 3 | `database.py` | Connection and session setup. Nothing touches data without it. |
+| 4 | `db_models.py` | Your tables as Python classes. |
+| 5 | Your first migration | `alembic revision --autogenerate`, then `alembic upgrade head`. Now the tables physically exist. |
+| 6 | `models.py` | The Pydantic shapes the API accepts and returns. |
+| 7 | `main.py` plus one router with ONE endpoint | The whole pipe, end to end. Do not skip this. |
+| 8 | Everything else | Now adding endpoints is repetitive instead of risky. |
 
-> **Step 7 is the important one.** A single working `GET /health` that reads one row from
-> the database proves your config, connection, models, migration, routing, and server are
-> all correct *at once*. Every bug you hit after that is in the endpoint you just wrote,
-> not somewhere in the foundations.
+Step 7 is the one that saves you. A single working endpoint that reads one row proves your
+config, connection, models, migration, routing and server are all correct at the same
+time. After that, any bug is in the endpoint you just wrote rather than buried somewhere
+in the foundations.
 
 ### Where files go
 
-A structure that works from day one and scales to a real project:
+This is the layout I'd use from day one:
 
 ```
 your-project/
-├── main.py              ← creates the app, includes routers. Nothing else.
-├── config.py            ← settings read from .env
-├── database.py          ← engine, session, data-access functions
-├── db_models.py         ← SQLAlchemy tables
-├── models.py            ← Pydantic request/response shapes
-├── auth.py              ← hashing, tokens, get_current_user
+├── main.py              creates the app, includes routers, nothing else
+├── config.py            settings read from .env
+├── database.py          engine, session, data access functions
+├── db_models.py         SQLAlchemy tables
+├── models.py            Pydantic request and response shapes
+├── auth.py              hashing, tokens, get_current_user
 ├── routers/
 │   ├── __init__.py
-│   ├── users.py         ← one file per resource
+│   ├── users.py         one file per resource
 │   └── items.py
-├── alembic/             ← migration scripts (COMMIT THESE)
+├── alembic/             migration scripts. COMMIT THESE.
 ├── alembic.ini
-├── .env                 ← real secrets. NEVER committed.
-├── .env.example         ← same keys, empty values. Always committed.
+├── .env                 real secrets. never committed.
+├── .env.example         same keys, empty values. always committed.
 ├── .gitignore
-├── pyproject.toml       ← dependencies
+├── pyproject.toml       dependencies
 └── README.md
 ```
 
-The rules behind that layout:
+The reasoning behind it:
 
-- **One file per resource in `routers/`.** When someone asks "where do I add a login
-  endpoint," the answer should be obvious without reading any code.
-- **`main.py` stays tiny.** It wires things together; it doesn't define behaviour. If
-  `main.py` is growing, something belongs in a router instead.
-- **`.env.example` is not optional.** It's the only way a new teammate knows which
-  variables they need. Same keys as `.env`, with the values stripped out.
-- **Commit your migrations.** They're the history of your schema. A teammate pulls your
-  branch, runs `alembic upgrade head`, and their database matches yours exactly.
+One file per resource in `routers/`, so "where do I add a login endpoint" is answerable
+without reading any code.
 
-### When to grow the structure
+`main.py` stays small. It wires things together, it doesn't define behaviour. If it's
+growing, something belongs in a router.
 
-Don't build folders you don't need yet. But once a project gets big, the next splits are:
+`.env.example` matters more than people think. It's the only way a new teammate knows
+which variables they need to set. Same keys as your real `.env`, values stripped out.
 
-| Add this | When |
+Commit your migrations. They're the history of your schema. Someone pulls your branch,
+runs `alembic upgrade head`, and their database matches yours exactly.
+
+### When to grow it
+
+Don't build folders you don't need yet. But eventually:
+
+| Add | When |
 |---|---|
-| `services/` | Business logic gets complicated enough that routes are hard to read. Routes call services; services hold the "what should happen" logic. |
-| `tests/` | Honestly, as early as you can stand. See below. |
-| `schemas/` (split from `models.py`) | You have more than ~10 Pydantic models and one file is unwieldy. |
+| `services/` | Business logic gets complex enough that routes are hard to read. Routes call services, services hold the "what should happen". |
+| `tests/` | As early as you can stand, honestly. |
+| `schemas/` split out of `models.py` | Once you have 10 or more Pydantic models and one file gets unwieldy. |
 
-### Practices worth adopting immediately
+### Things I'd do from the start
 
 | Practice | Why |
 |---|---|
-| **Routes stay thin** | A route should read input, check permission, call a function, return. If there are 40 lines of logic in your route, it belongs in `database.py` or a service. |
-| **The data layer never raises `HTTPException`** | `database.py` shouldn't know HTTP exists. It returns data or `None`; the router decides that `None` means `404`. This is what lets you test logic without a server. |
-| **Separate input and output models** | See the mistake below — this one bites everyone once. |
-| **Every schema change is a migration** | Never edit the database by hand. If it's not in `alembic/versions/`, it doesn't exist on anyone else's machine. |
-| **Return the right status code** | `201` for created, `404` for missing, `403` for not-allowed. Clients (and your future self) branch on these. |
-| **Never log tokens or passwords** | They end up in log files, which end up in screenshots, which end up in group chats. |
-| **Write the error path first** | Write the `if not found: raise 404` before the happy path. It's the half everyone forgets and the half that breaks in production. |
+| Keep routes thin | A route should read input, check permission, call a function, return. Forty lines of logic in a route belongs in `database.py` or a service. |
+| Data layer never raises `HTTPException` | `database.py` shouldn't know HTTP exists. It returns data or `None`, the router decides `None` means 404. This is what lets you test logic without a server. |
+| Separate input and output models | See mistake 1 below. |
+| Every schema change is a migration | Never edit the database by hand. If it isn't in `alembic/versions/`, it doesn't exist on anyone else's machine. |
+| Return correct status codes | 201 created, 404 missing, 403 not allowed. Clients branch on these, and so will you in three months. |
+| Never log tokens or passwords | They end up in log files, which end up in screenshots, which end up in group chats. |
+| Write the error path first | Write `if not found: raise 404` before the happy path. It's the half everyone forgets and the half that breaks in production. |
 
-### Five mistakes that will definitely happen once
+### Five mistakes I've made or watched happen
 
-1. **Using one Pydantic model for both input and output.** You accept a `User` with a
-   `password` field, then return a `User` from `GET /users/{id}` — and now your API is
-   serving password hashes to anyone who asks. **Fix:** `UserCreate` (has `password`) for
-   input, `UserPublic` (no `password`) for output. Two models, always.
+**1. One Pydantic model for both input and output.** You accept a `User` with a `password`
+field and then return a `User` from `GET /users/{id}`, and now your API serves password
+hashes to anybody who asks. Use `UserCreate` with the password for input and `UserPublic`
+without it for output. Two models, always.
 
-2. **Editing the database by hand.** It works on your laptop and nowhere else. Nobody can
-   reproduce your schema. **Fix:** migrations, every time, no exceptions.
+**2. Editing the database by hand.** Works on your laptop, works nowhere else, and nobody
+can reproduce your schema. Migrations every time.
 
-3. **Wrapping everything in `try/except Exception` and returning `500`.** This swallows
-   your deliberate `404`s and `403`s and reports them as server errors, making every bug
-   look identical. **Fix:** let real errors bubble up; only catch what you can meaningfully handle.
+**3. Wrapping everything in `try/except Exception` and returning 500.** This swallows your
+own deliberate 404s and 403s and reports them as server errors, so every bug looks
+identical when you're debugging. Let real errors bubble up, only catch what you can
+actually handle.
 
-4. **Committing `.env`.** Your secret key is now in git history forever — deleting the file
-   in a later commit does *not* remove it. **Fix:** `.gitignore` it on day one. If it does
-   get committed, rotate the secret; don't just delete the line.
+**4. Committing `.env`.** Your secret key is now in git history permanently, and deleting
+the file in a later commit does not remove it. Gitignore it on day one. If it does get
+committed, rotate the secret rather than just deleting the line.
 
-5. **Forgetting that a blank env var is not an unset one.** `DOCS_URL=` in a `.env` file
-   sets it to an empty string, which *overrides* your code's default rather than falling
-   back to it. **Fix:** delete the line entirely if you want the default.
+**5. Assuming a blank env var means unset.** `DOCS_URL=` in a `.env` file sets it to an
+empty string, which overrides your code's default instead of falling back to it. This one
+cost me a confusing half hour. If you want the default, delete the line entirely.
 
 ---
 
 ## 9. Case study: designing a system from scratch
 
-This is how a real design conversation goes — the same four steps from Section 3, worked
-through end to end. Read this one, then do the exercise in Section 10 yourself.
+Here's how a design conversation actually goes, using the four steps from section 3. Read
+this, then do the exercise in section 10 yourself.
 
-> **The brief:** *"We want to track attendance and points for committee sessions."*
+> **The brief:** "We want to track attendance and points for committee sessions."
 
-That's all you get. That's realistically all you ever get. The job is turning it into a design.
+That's all you get. Realistically that's all you'll ever get. The job is turning it into a
+design.
 
-### Step 1 — Ask questions before designing anything
+### Step 1: ask questions before designing anything
 
-A vague brief hides a dozen decisions. The questions worth asking here:
+A vague brief is hiding a dozen decisions. The questions I'd ask:
 
-| Question | Answer we get back | Why it changes the design |
+| Question | Answer | Why it changes things |
 |---|---|---|
-| Who uses this? | Chairs mark attendance; delegates view their own record | Two roles → a permission matrix is needed |
-| How many delegates? | ~200, across 10 committees, 3 days | Small. No caching, no sharding, no complexity budget spent on scale |
-| Per session, or per day? | Per session — 9 sessions total | Attendance is *per (delegate, session)*, not a single flag |
-| Do we need history? | Yes — "how many sessions did Ada miss?" | Rules out storing just a running count |
-| Who awards points, and can they be revoked? | Chairs award; mistakes happen, so yes | Points need an audit trail, not a single total |
+| Who uses this? | Chairs mark attendance, delegates view their own record | Two roles, so we need a permission matrix |
+| How many delegates? | ~200, 10 committees, 3 days | Small. No caching, no scaling complexity needed |
+| Per session or per day? | Per session, 9 total | Attendance is per delegate per session, not one flag |
+| Do we need history? | Yes, "how many sessions did Ada miss" | Rules out storing a running count |
+| Who awards points, can they be revoked? | Chairs award, and mistakes happen so yes | Points need an audit trail, not a single total |
 
-**The lesson:** every one of those answers eliminated a design that would have seemed
-reasonable. Fifteen minutes of questions saves a schema migration later.
+Every one of those answers killed a design that would otherwise have seemed fine. Fifteen
+minutes of questions saves a migration later.
 
-### Step 2 — Entities and the shape of the data
+### Step 2: entities and shape
 
-From the answers: **Delegate**, **Committee**, **Session**, **AttendanceRecord**, **PointsAward**.
+From those answers: **Delegate**, **Committee**, **Session**, **AttendanceRecord**,
+**PointsAward**.
 
 ```mermaid
 erDiagram
@@ -660,111 +670,109 @@ erDiagram
     }
 ```
 
-**The decision worth noticing:** attendance is its own table, not a `present: bool` column
-on `delegates`. A delegate attends *many* sessions, so a single boolean can't represent it.
-Whenever you hear "one X has many Y," Y is its own table with a foreign key back to X.
+The decision worth noticing: attendance is its own table, not a `present: bool` column on
+the delegate. A delegate attends many sessions and a single boolean can't hold that.
+Any time you hear "one X has many Y", Y is its own table with a foreign key back to X.
 
-Same reasoning for points: each award is a **row**, not a `total_points` number. Storing
-rows means you can answer "who gave these points and why" and undo a mistake. A running
-total can only ever answer "how many," and can never be audited.
+Same logic for points. Each award is a row rather than a `total_points` number, so we can
+answer "who gave these and why" and undo a mistake. A running total can only ever tell you
+how many, and it can never be audited.
 
-### Step 3 — Endpoints and permissions
+### Step 3: endpoints and permissions
 
-| Method | Path | Who | Does what |
+| Method | Path | Who | Does |
 |---|---|---|---|
 | `GET` | `/sessions/{id}/attendance` | Chair of that committee | The roster to mark |
-| `POST` | `/sessions/{id}/attendance` | Chair of that committee | Submit attendance for a session |
+| `POST` | `/sessions/{id}/attendance` | Chair of that committee | Submit attendance |
 | `GET` | `/delegates/me/attendance` | Any delegate | Their own record only |
-| `POST` | `/delegates/{id}/points` | Chair of that committee | Award points, with a reason |
-| `DELETE` | `/points/{id}` | Chair who awarded it, or admin | Revoke a mistaken award |
+| `POST` | `/delegates/{id}/points` | Chair of that committee | Award points with a reason |
+| `DELETE` | `/points/{id}` | Chair who awarded it, or admin | Revoke a mistake |
 | `GET` | `/committees/{id}/leaderboard` | Anyone in that committee | Standings |
 
 | Action | Delegate | Chair | Admin |
 |---|---|---|---|
-| Mark attendance | ❌ | ✅ (own committee) | ✅ |
-| View own attendance | ✅ | ✅ | ✅ |
-| View others' attendance | ❌ | ✅ (own committee) | ✅ |
-| Award / revoke points | ❌ | ✅ (own committee) | ✅ |
+| Mark attendance | no | yes, own committee | yes |
+| View own attendance | yes | yes | yes |
+| View others' attendance | no | yes, own committee | yes |
+| Award or revoke points | no | yes, own committee | yes |
 
-Notice "own committee" appears repeatedly — that's a real constraint, and writing it in
-the table means you'll remember to actually implement it, rather than shipping a chair who
-can mark attendance for a committee they don't run.
+"Own committee" keeps showing up, which is a real constraint. Writing it in the table is
+how you remember to actually implement it, instead of shipping a chair who can mark
+attendance for a committee they don't run.
 
-### Step 4 — Wrap up: what we'd build first
+### Step 4: what I'd build first
 
-Following the build order from Section 8: `config.py` → `database.py` → the five tables →
-migration → Pydantic models → **one endpoint** (`GET /delegates/me/attendance`, the
-simplest read) → then the rest.
+Following the order from section 8: `config.py`, `database.py`, the five tables,
+migration, Pydantic models, then one endpoint (`GET /delegates/me/attendance`, the
+simplest read), then the rest.
 
-Total: five tables, six endpoints, one permission rule that repeats. That's a completely
-tractable project — *because* the questions in Step 1 kept it from becoming an
-architecture astronaut's playground.
+Five tables, six endpoints, one permission rule that repeats. Completely doable, and it
+stayed that small because the questions in step 1 stopped it from ballooning.
 
 ---
 
 ## 10. Your turn
 
-Same process, new brief. Work through it before writing any code.
+Same process, different brief. Do this before writing any code.
 
-> **The brief:** *"After each committee session, delegates should be able to rate their
+> **The brief:** "After each committee session, delegates should be able to rate their
 > chair out of 5 and leave a comment. Chairs should see how they're doing. But delegates
-> need to feel safe being honest."*
+> need to feel safe being honest."
 
-### Part A — Design it on paper (45 minutes, no code)
+### Part A: design it on paper, about 45 minutes
 
-Produce five things:
+Give me five things:
 
-1. **A questions list.** At least six questions you'd ask before designing. This is the
-   part people skip and the part that matters most.
-2. **An entity list**, with a one-line description of each.
-3. **An ER diagram** — hand-drawn is fine, or mermaid if you're feeling fancy.
-4. **An endpoint table** — method, path, who can call it, what it does.
-5. **A permission matrix** — delegate / chair / admin down the side, actions across the top.
+1. **A questions list.** At least six things you'd ask before designing. This is the part
+   everyone skips and the part that matters most.
+2. **An entity list** with a one line description of each.
+3. **An ER diagram.** Hand drawn is fine.
+4. **An endpoint table.** Method, path, who can call it, what it does.
+5. **A permission matrix.** Delegate, chair, admin down the side.
 
-**The interesting problem is the anonymity requirement.** "Delegates need to feel safe"
-pulls against "we must stop one person submitting fifty ratings." You have to *know* who
-submitted, to enforce one-per-session — but chairs must never see it. Write down, in two
-or three sentences, how your design resolves that. There's more than one defensible
-answer; the point is choosing deliberately and being able to justify it.
+The interesting problem here is the anonymity bit. "Delegates need to feel safe" pulls
+against "we can't let one person submit fifty ratings". You have to know who submitted in
+order to enforce one per session, but the chair must never see it. Write two or three
+sentences on how your design handles that. There's more than one good answer, I care that
+you picked one deliberately and can defend it.
 
-### Part B — Build it (a few hours)
+### Part B: build it
 
-1. Set up the project using the structure and build order from Section 8.
-2. Get **one** endpoint working end to end before writing any others.
+1. Set it up using the structure and build order from section 8.
+2. Get one endpoint working end to end before writing any others.
 3. Implement the rest of your endpoint table.
-4. Enforce your permission matrix — every ❌ in that table is a test you should be able to
-   perform in Swagger and see rejected.
+4. Enforce your permission matrix. Every "no" in that table is something you should be
+   able to try in Swagger and watch get rejected.
 
 ### You're done when
 
-- [ ] A delegate can submit a rating, and **cannot** submit twice for the same session
+- [ ] A delegate can submit a rating and cannot submit twice for the same session
 - [ ] A delegate can see their own submissions
-- [ ] A chair can see their **average** rating and the comments, with no names attached
-- [ ] A chair **cannot** see ratings for another chair
+- [ ] A chair sees their average rating and the comments, with no names attached
+- [ ] A chair cannot see another chair's ratings
 - [ ] An admin can see everything
-- [ ] Every endpoint returns a sensible status code — `201` on create, `403` on
-      not-allowed, `404` on missing, `409` on duplicate
-- [ ] Your `.env` is gitignored and a `.env.example` exists
-- [ ] Every table came from a migration, not from hand-editing the database
+- [ ] Endpoints return sensible codes: 201 on create, 403 not allowed, 404 missing, 409 duplicate
+- [ ] `.env` is gitignored and `.env.example` exists
+- [ ] Every table came from a migration, not from hand editing the database
 
-### Then compare
+### Then look back
 
-Once it works, re-read your Part A design. What did you get wrong? Which entity did you
-miss? Which permission did you forget until you were halfway through building?
+When it works, reread your part A design. What did you get wrong? Which entity did you
+miss? Which permission did you not think about until you were halfway through building it?
 
-**That gap — between the design you wrote and the design you needed — is the actual skill
-this whole document is trying to teach.** Nobody gets it right on the first pass. The goal
-is to make the gap smaller each time, and to find it on paper rather than in production.
+That gap between the design you wrote and the design you needed is the thing this whole
+doc is trying to shrink. Nobody gets it right first time, I certainly didn't. The goal is
+just to find the gap on paper instead of in production.
 
 ---
 
 ## 11. Further reading
 
-- [FastAPI's official tutorial](https://fastapi.tiangolo.com/tutorial/) — genuinely one of
-  the best framework docs written; work through it in order
-- [Pydantic docs](https://docs.pydantic.dev/) — anything about validation and shapes
-- [SQLAlchemy ORM tutorial](https://docs.sqlalchemy.org/en/20/orm/quickstart.html) — when
-  you're ready to swap toy storage for a real database
-- [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html) — migrations
-- *System Design Interview* by Alex Xu — for when you outgrow "does it work" and start
-  asking "does it work at scale"
+- [FastAPI's tutorial](https://fastapi.tiangolo.com/tutorial/). One of the better framework
+  docs out there, work through it in order.
+- [Pydantic docs](https://docs.pydantic.dev/) for anything about validation and shapes.
+- [SQLAlchemy ORM tutorial](https://docs.sqlalchemy.org/en/20/orm/quickstart.html) for when
+  you swap toy storage for a real database.
+- [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html) for migrations.
+- *System Design Interview* by Alex Xu, for when you outgrow "does it work" and start
+  asking "does it work at scale".
