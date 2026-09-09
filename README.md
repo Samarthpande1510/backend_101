@@ -3,15 +3,6 @@
 A ground-up introduction to backend development: the vocabulary, how to think about system
 design, and FastAPI fundamentals.
 
-Written for someone who knows basic Python — variables, functions, loops, maybe classes —
-but has never built a backend. Every term is defined the first time it's used.
-
-Examples throughout come from **MUNDRA**, a real delegate-management backend built with
-FastAPI and Postgres, rather than invented toy code — so the patterns here are ones that
-survived contact with an actual running app.
-
----
-
 ## Table of contents
 
 1. [What is a backend, actually?](#1-what-is-a-backend-actually)
@@ -21,7 +12,10 @@ survived contact with an actual running app.
 5. [CRUD in FastAPI, one operation at a time](#5-crud-in-fastapi-one-operation-at-a-time)
 6. [`app` vs `router`: what they are and when to use each](#6-app-vs-router-what-they-are-and-when-to-use-each)
 7. [Quick reference](#7-quick-reference)
-8. [Where to go next](#8-where-to-go-next)
+8. [Building your own backend: practices that matter](#8-building-your-own-backend-practices-that-matter)
+9. [Case study: designing a system from scratch](#9-case-study-designing-a-system-from-scratch)
+10. [Your turn](#10-your-turn)
+11. [Further reading](#11-further-reading)
 
 ---
 
@@ -498,26 +492,279 @@ it — organized, self-contained, and pointless without the building around it.
 
 ---
 
-## 8. Where to go next
+## 8. Building your own backend: practices that matter
 
-Reading only gets you so far — the fastest way to make this stick is to build the smallest
-possible thing end to end. In rough order of difficulty:
+### The order to build things in
 
-1. **Run the hello-world app** from Section 4. Open the Swagger docs. Click the endpoint.
-   Watch a request actually happen.
-2. **Add all four CRUD endpoints** for a single made-up resource — a book, a task, a snack
-   — storing them in a plain Python dict. No database yet. This teaches routing and
-   Pydantic without any extra moving parts.
-3. **Split those endpoints into a router** and include it from `main.py` with a prefix.
-   Watch the paths change in the docs. This is Section 6 made concrete.
-4. **Swap the dict for a real database** using SQLAlchemy. This is the biggest jump, and
-   where the "two kinds of models" distinction from the glossary starts to matter.
-5. **Add authentication** so some endpoints require a token.
+Beginners tend to write fifteen endpoints, then discover their database connection was
+misconfigured the whole time. Build **depth before breadth** — get one endpoint working
+end to end, then repeat.
 
-Useful references once you're past the basics:
+| # | Build this | Why it comes here |
+|---|---|---|
+| 1 | **The entity list, on paper** | No code. If you can't name the nouns, code won't rescue you. (Section 3, Step 1.) |
+| 2 | **`config.py`** | Reads env vars. Everything else needs settings — the DB URL, the secret key. |
+| 3 | **`database.py`** | The connection and session setup. Nothing touches data without it. |
+| 4 | **`db_models.py`** | Your tables, as Python classes. |
+| 5 | **Your first migration** | `alembic revision --autogenerate` then `alembic upgrade head`. Now the tables physically exist. |
+| 6 | **`models.py`** | The Pydantic shapes your API accepts and returns. |
+| 7 | **`main.py` + one router + ONE endpoint** | The whole pipe, end to end. Do not skip this. |
+| 8 | **Everything else** | Now that the pipe works, adding endpoints is repetitive rather than risky. |
+
+> **Step 7 is the important one.** A single working `GET /health` that reads one row from
+> the database proves your config, connection, models, migration, routing, and server are
+> all correct *at once*. Every bug you hit after that is in the endpoint you just wrote,
+> not somewhere in the foundations.
+
+### Where files go
+
+A structure that works from day one and scales to a real project:
+
+```
+your-project/
+├── main.py              ← creates the app, includes routers. Nothing else.
+├── config.py            ← settings read from .env
+├── database.py          ← engine, session, data-access functions
+├── db_models.py         ← SQLAlchemy tables
+├── models.py            ← Pydantic request/response shapes
+├── auth.py              ← hashing, tokens, get_current_user
+├── routers/
+│   ├── __init__.py
+│   ├── users.py         ← one file per resource
+│   └── items.py
+├── alembic/             ← migration scripts (COMMIT THESE)
+├── alembic.ini
+├── .env                 ← real secrets. NEVER committed.
+├── .env.example         ← same keys, empty values. Always committed.
+├── .gitignore
+├── pyproject.toml       ← dependencies
+└── README.md
+```
+
+The rules behind that layout:
+
+- **One file per resource in `routers/`.** When someone asks "where do I add a login
+  endpoint," the answer should be obvious without reading any code.
+- **`main.py` stays tiny.** It wires things together; it doesn't define behaviour. If
+  `main.py` is growing, something belongs in a router instead.
+- **`.env.example` is not optional.** It's the only way a new teammate knows which
+  variables they need. Same keys as `.env`, with the values stripped out.
+- **Commit your migrations.** They're the history of your schema. A teammate pulls your
+  branch, runs `alembic upgrade head`, and their database matches yours exactly.
+
+### When to grow the structure
+
+Don't build folders you don't need yet. But once a project gets big, the next splits are:
+
+| Add this | When |
+|---|---|
+| `services/` | Business logic gets complicated enough that routes are hard to read. Routes call services; services hold the "what should happen" logic. |
+| `tests/` | Honestly, as early as you can stand. See below. |
+| `schemas/` (split from `models.py`) | You have more than ~10 Pydantic models and one file is unwieldy. |
+
+### Practices worth adopting immediately
+
+| Practice | Why |
+|---|---|
+| **Routes stay thin** | A route should read input, check permission, call a function, return. If there are 40 lines of logic in your route, it belongs in `database.py` or a service. |
+| **The data layer never raises `HTTPException`** | `database.py` shouldn't know HTTP exists. It returns data or `None`; the router decides that `None` means `404`. This is what lets you test logic without a server. |
+| **Separate input and output models** | See the mistake below — this one bites everyone once. |
+| **Every schema change is a migration** | Never edit the database by hand. If it's not in `alembic/versions/`, it doesn't exist on anyone else's machine. |
+| **Return the right status code** | `201` for created, `404` for missing, `403` for not-allowed. Clients (and your future self) branch on these. |
+| **Never log tokens or passwords** | They end up in log files, which end up in screenshots, which end up in group chats. |
+| **Write the error path first** | Write the `if not found: raise 404` before the happy path. It's the half everyone forgets and the half that breaks in production. |
+
+### Five mistakes that will definitely happen once
+
+1. **Using one Pydantic model for both input and output.** You accept a `User` with a
+   `password` field, then return a `User` from `GET /users/{id}` — and now your API is
+   serving password hashes to anyone who asks. **Fix:** `UserCreate` (has `password`) for
+   input, `UserPublic` (no `password`) for output. Two models, always.
+
+2. **Editing the database by hand.** It works on your laptop and nowhere else. Nobody can
+   reproduce your schema. **Fix:** migrations, every time, no exceptions.
+
+3. **Wrapping everything in `try/except Exception` and returning `500`.** This swallows
+   your deliberate `404`s and `403`s and reports them as server errors, making every bug
+   look identical. **Fix:** let real errors bubble up; only catch what you can meaningfully handle.
+
+4. **Committing `.env`.** Your secret key is now in git history forever — deleting the file
+   in a later commit does *not* remove it. **Fix:** `.gitignore` it on day one. If it does
+   get committed, rotate the secret; don't just delete the line.
+
+5. **Forgetting that a blank env var is not an unset one.** `DOCS_URL=` in a `.env` file
+   sets it to an empty string, which *overrides* your code's default rather than falling
+   back to it. **Fix:** delete the line entirely if you want the default.
+
+---
+
+## 9. Case study: designing a system from scratch
+
+This is how a real design conversation goes — the same four steps from Section 3, worked
+through end to end. Read this one, then do the exercise in Section 10 yourself.
+
+> **The brief:** *"We want to track attendance and points for committee sessions."*
+
+That's all you get. That's realistically all you ever get. The job is turning it into a design.
+
+### Step 1 — Ask questions before designing anything
+
+A vague brief hides a dozen decisions. The questions worth asking here:
+
+| Question | Answer we get back | Why it changes the design |
+|---|---|---|
+| Who uses this? | Chairs mark attendance; delegates view their own record | Two roles → a permission matrix is needed |
+| How many delegates? | ~200, across 10 committees, 3 days | Small. No caching, no sharding, no complexity budget spent on scale |
+| Per session, or per day? | Per session — 9 sessions total | Attendance is *per (delegate, session)*, not a single flag |
+| Do we need history? | Yes — "how many sessions did Ada miss?" | Rules out storing just a running count |
+| Who awards points, and can they be revoked? | Chairs award; mistakes happen, so yes | Points need an audit trail, not a single total |
+
+**The lesson:** every one of those answers eliminated a design that would have seemed
+reasonable. Fifteen minutes of questions saves a schema migration later.
+
+### Step 2 — Entities and the shape of the data
+
+From the answers: **Delegate**, **Committee**, **Session**, **AttendanceRecord**, **PointsAward**.
+
+```mermaid
+erDiagram
+    committees ||--o{ sessions : "has"
+    committees ||--o{ delegates : "contains"
+    sessions ||--o{ attendance_records : "generates"
+    delegates ||--o{ attendance_records : "has"
+    delegates ||--o{ points_awards : "receives"
+
+    delegates {
+        int id PK
+        string name
+        int committee_id FK
+    }
+    sessions {
+        int id PK
+        int committee_id FK
+        string name
+        datetime starts_at
+    }
+    attendance_records {
+        int id PK
+        int delegate_id FK
+        int session_id FK
+        string status
+    }
+    points_awards {
+        int id PK
+        int delegate_id FK
+        int points
+        string reason
+        datetime awarded_at
+    }
+```
+
+**The decision worth noticing:** attendance is its own table, not a `present: bool` column
+on `delegates`. A delegate attends *many* sessions, so a single boolean can't represent it.
+Whenever you hear "one X has many Y," Y is its own table with a foreign key back to X.
+
+Same reasoning for points: each award is a **row**, not a `total_points` number. Storing
+rows means you can answer "who gave these points and why" and undo a mistake. A running
+total can only ever answer "how many," and can never be audited.
+
+### Step 3 — Endpoints and permissions
+
+| Method | Path | Who | Does what |
+|---|---|---|---|
+| `GET` | `/sessions/{id}/attendance` | Chair of that committee | The roster to mark |
+| `POST` | `/sessions/{id}/attendance` | Chair of that committee | Submit attendance for a session |
+| `GET` | `/delegates/me/attendance` | Any delegate | Their own record only |
+| `POST` | `/delegates/{id}/points` | Chair of that committee | Award points, with a reason |
+| `DELETE` | `/points/{id}` | Chair who awarded it, or admin | Revoke a mistaken award |
+| `GET` | `/committees/{id}/leaderboard` | Anyone in that committee | Standings |
+
+| Action | Delegate | Chair | Admin |
+|---|---|---|---|
+| Mark attendance | ❌ | ✅ (own committee) | ✅ |
+| View own attendance | ✅ | ✅ | ✅ |
+| View others' attendance | ❌ | ✅ (own committee) | ✅ |
+| Award / revoke points | ❌ | ✅ (own committee) | ✅ |
+
+Notice "own committee" appears repeatedly — that's a real constraint, and writing it in
+the table means you'll remember to actually implement it, rather than shipping a chair who
+can mark attendance for a committee they don't run.
+
+### Step 4 — Wrap up: what we'd build first
+
+Following the build order from Section 8: `config.py` → `database.py` → the five tables →
+migration → Pydantic models → **one endpoint** (`GET /delegates/me/attendance`, the
+simplest read) → then the rest.
+
+Total: five tables, six endpoints, one permission rule that repeats. That's a completely
+tractable project — *because* the questions in Step 1 kept it from becoming an
+architecture astronaut's playground.
+
+---
+
+## 10. Your turn
+
+Same process, new brief. Work through it before writing any code.
+
+> **The brief:** *"After each committee session, delegates should be able to rate their
+> chair out of 5 and leave a comment. Chairs should see how they're doing. But delegates
+> need to feel safe being honest."*
+
+### Part A — Design it on paper (45 minutes, no code)
+
+Produce five things:
+
+1. **A questions list.** At least six questions you'd ask before designing. This is the
+   part people skip and the part that matters most.
+2. **An entity list**, with a one-line description of each.
+3. **An ER diagram** — hand-drawn is fine, or mermaid if you're feeling fancy.
+4. **An endpoint table** — method, path, who can call it, what it does.
+5. **A permission matrix** — delegate / chair / admin down the side, actions across the top.
+
+**The interesting problem is the anonymity requirement.** "Delegates need to feel safe"
+pulls against "we must stop one person submitting fifty ratings." You have to *know* who
+submitted, to enforce one-per-session — but chairs must never see it. Write down, in two
+or three sentences, how your design resolves that. There's more than one defensible
+answer; the point is choosing deliberately and being able to justify it.
+
+### Part B — Build it (a few hours)
+
+1. Set up the project using the structure and build order from Section 8.
+2. Get **one** endpoint working end to end before writing any others.
+3. Implement the rest of your endpoint table.
+4. Enforce your permission matrix — every ❌ in that table is a test you should be able to
+   perform in Swagger and see rejected.
+
+### You're done when
+
+- [ ] A delegate can submit a rating, and **cannot** submit twice for the same session
+- [ ] A delegate can see their own submissions
+- [ ] A chair can see their **average** rating and the comments, with no names attached
+- [ ] A chair **cannot** see ratings for another chair
+- [ ] An admin can see everything
+- [ ] Every endpoint returns a sensible status code — `201` on create, `403` on
+      not-allowed, `404` on missing, `409` on duplicate
+- [ ] Your `.env` is gitignored and a `.env.example` exists
+- [ ] Every table came from a migration, not from hand-editing the database
+
+### Then compare
+
+Once it works, re-read your Part A design. What did you get wrong? Which entity did you
+miss? Which permission did you forget until you were halfway through building?
+
+**That gap — between the design you wrote and the design you needed — is the actual skill
+this whole document is trying to teach.** Nobody gets it right on the first pass. The goal
+is to make the gap smaller each time, and to find it on paper rather than in production.
+
+---
+
+## 11. Further reading
 
 - [FastAPI's official tutorial](https://fastapi.tiangolo.com/tutorial/) — genuinely one of
   the best framework docs written; work through it in order
-- [Pydantic docs](https://docs.pydantic.dev/) — for anything about validation and shapes
+- [Pydantic docs](https://docs.pydantic.dev/) — anything about validation and shapes
 - [SQLAlchemy ORM tutorial](https://docs.sqlalchemy.org/en/20/orm/quickstart.html) — when
-  you reach step 4
+  you're ready to swap toy storage for a real database
+- [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html) — migrations
+- *System Design Interview* by Alex Xu — for when you outgrow "does it work" and start
+  asking "does it work at scale"
