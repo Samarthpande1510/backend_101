@@ -100,12 +100,46 @@ brew services start postgresql@16
 pg_isready
 ```
 
-If `brew services` throws a weird Ruby error (it did on my machine), start it directly
-instead:
+#### If `brew services` throws an error
+
+On my machine `brew services start` crashed with a long Ruby error ending in something
+like `undefined method 'stop_timeout'`. That means Homebrew itself is out of date or in a
+bad state. Here's how I fixed it, in order:
+
+```bash
+# 1. Update Homebrew and clear its cache
+brew update
+brew cleanup
+
+# 2. Reinstall the services extension (older Homebrew only)
+brew untap homebrew/services
+brew tap homebrew/services
+
+# 3. Remove a stale lock file left behind by a crashed Postgres
+rm -f /opt/homebrew/var/postgresql@16/postmaster.pid
+
+# 4. Try starting it again
+brew services start postgresql@16
+pg_isready
+```
+
+A few notes on those steps:
+
+- **Step 1 is usually the actual fix.** Try step 4 straight after it before doing anything else.
+- **Step 2 only applies to older Homebrew.** Newer versions have `services` built in, so
+  `brew untap` will say there's no such tap. If you see that, just skip step 2.
+- **Only do step 3 if Postgres is definitely not running.** Run `pg_isready` first. If it
+  says `accepting connections`, stop, you don't need any of this. Deleting that file
+  while Postgres is running can damage your database.
+
+If it still won't start after all that, you can skip `brew services` and start Postgres
+directly:
 
 ```bash
 pg_ctl -D /opt/homebrew/var/postgresql@16 -l /opt/homebrew/var/log/postgresql@16.log start
 ```
+
+This works, but you'll have to run it again every time you restart your laptop.
 
 **Windows**
 
