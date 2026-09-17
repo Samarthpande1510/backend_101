@@ -40,46 +40,93 @@ Tick them off as you go.
 
 ## 2. Set up your machine
 
-These commands are for macOS. If you're on Windows, install
-[WSL](https://learn.microsoft.com/en-us/windows/wsl/install) first and run everything
-inside the Ubuntu terminal it gives you. Come find me if you get stuck here, setup is the
-most annoying part and it's not worth losing a day to.
+Every step has a **macOS** version and a **Windows** version. Where a command is the same
+on both, I've only written it once. On Windows, use **PowerShell** for this whole section
+(search for it in the Start menu).
+
+Come find me if you get stuck here. Setup is the most annoying part of the whole day and
+it's not worth losing hours to.
 
 ### 2.1 Install the tools
 
-```bash
-# Homebrew, if you don't have it: https://brew.sh
+| Tool | What it's for |
+|---|---|
+| **git** | Getting the code, and sending your changes back |
+| **PostgreSQL** | The database. Runs quietly in the background on your laptop |
+| **uv** | Installs Python and all our packages for you, and runs commands inside the project |
 
+**macOS**
+
+```bash
+# Homebrew first, if you don't have it: https://brew.sh
 brew install git
 brew install postgresql@16
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-What each one is:
+**Windows**
 
-| Tool | What it's for |
-|---|---|
-| **git** | Getting the code, and sending your changes back |
-| **postgresql** | The database. Runs quietly in the background on your laptop |
-| **uv** | Installs Python and all our packages for you, and runs commands inside the project |
+```powershell
+winget install --id Git.Git -e
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
-Close and reopen your terminal after installing uv so it shows up.
+For Postgres on Windows, download the installer from
+[postgresql.org/download/windows](https://www.postgresql.org/download/windows/) (pick
+version 16) and run it. While it installs:
+
+- It asks you to set a password for the `postgres` user. **Write this down**, you need it
+  in step 2.5.
+- Leave the port as `5432`.
+- You can untick Stack Builder at the end, we don't need it.
+
+Then tell PowerShell where the Postgres commands live. Search the Start menu for **"Edit
+the system environment variables"**, click **Environment Variables**, select **Path** under
+your user variables, click **Edit**, then **New**, and add:
+
+```
+C:\Program Files\PostgreSQL\16\bin
+```
+
+Whichever OS you're on, **close and reopen your terminal** after installing everything so
+the new commands show up.
 
 ### 2.2 Start Postgres
+
+**macOS**
 
 ```bash
 brew services start postgresql@16
 pg_isready
 ```
 
-You want `pg_isready` to say `accepting connections`. If `brew services` throws a weird
-Ruby error (it did on my machine), start it directly instead:
+If `brew services` throws a weird Ruby error (it did on my machine), start it directly
+instead:
 
 ```bash
 pg_ctl -D /opt/homebrew/var/postgresql@16 -l /opt/homebrew/var/log/postgresql@16.log start
 ```
 
+**Windows**
+
+The installer sets Postgres up as a service that starts by itself, so it's usually already
+running. Check:
+
+```powershell
+pg_isready
+```
+
+If it isn't running, start it:
+
+```powershell
+Start-Service postgresql-x64-16
+```
+
+On both, you want `pg_isready` to say `accepting connections`.
+
 ### 2.3 Get the code and install packages
+
+Same on both:
 
 ```bash
 git clone https://github.com/munsoc-mpstme/mundra
@@ -93,25 +140,45 @@ you just put `uv run` in front of commands.
 
 ### 2.4 Create your database
 
+**macOS**
+
 ```bash
 createdb mundra
 psql mundra -c "select current_user;"
 ```
 
 The second command prints your Postgres username. On a Mac it's usually the same as your
-laptop username. Remember it, you need it in the next step.
+laptop username and there's no password. Remember it, you need it in the next step.
+
+**Windows**
+
+```powershell
+createdb -U postgres mundra
+psql -U postgres -d mundra -c "select current_user;"
+```
+
+Both ask for the password you set during install. Your username is `postgres`.
 
 ### 2.5 Make your `.env`
+
+**macOS**
 
 ```bash
 cp sample.env .env
 ```
 
-Open `.env` and fill it in like this. Replace `yourname` with the username from step 2.4.
+**Windows**
+
+```powershell
+Copy-Item sample.env .env
+```
+
+Now open `.env` in VS Code and fill it in. The only line that differs between the two is
+`DATABASE_URL`.
 
 ```ini
 SECRET_KEY=paste-a-long-random-string-here
-DATABASE_URL=postgresql+psycopg2://yourname@localhost:5432/mundra
+DATABASE_URL=see-below
 MAIL_SERVER=localhost
 MAIL_PASSWORD=
 URL=http://localhost:8000
@@ -119,10 +186,17 @@ DOCS_URL=/swagger
 REDOC_URL=/docs
 ```
 
-To get a random secret key:
+For `DATABASE_URL`:
+
+| OS | Use |
+|---|---|
+| macOS | `postgresql+psycopg2://yourname@localhost:5432/mundra` (your username from 2.4, no password) |
+| Windows | `postgresql+psycopg2://postgres:yourpassword@localhost:5432/mundra` (the password from the installer) |
+
+To get a random secret key, same on both:
 
 ```bash
-openssl rand -hex 32
+uv run python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 Two things I learned the hard way here:
@@ -135,40 +209,74 @@ Two things I learned the hard way here:
 `MAIL_SERVER=localhost` means emails won't actually send on your laptop. That's fine,
 section 10 explains what that looks like and how to work around it.
 
+If your Postgres password has symbols like `@`, `#` or `/` in it, the URL breaks. Either
+pick a password without them, or ask me how to encode it.
+
 ### 2.6 Create the tables
+
+Same on both:
 
 ```bash
 uv run alembic upgrade head
+```
+
+Alembic runs every migration file in `alembic/versions/` and builds the tables. To check
+it worked, list them:
+
+**macOS**
+
+```bash
 psql mundra -c "\dt"
 ```
 
-Alembic runs every migration file in `alembic/versions/` and builds the tables. The
-second command lists them. You should see `admins`, `delegates`, `users`,
-`mun_experiences`, `mm_delegates`, `mm_mun_experiences`, `refresh_tokens` and
-`alembic_version`.
+**Windows**
+
+```powershell
+psql -U postgres -d mundra -c "\dt"
+```
+
+You should see `admins`, `delegates`, `users`, `mun_experiences`, `mm_delegates`,
+`mm_mun_experiences`, `refresh_tokens` and `alembic_version`.
 
 ### 2.7 Run it
 
-```bash
-uv run fastapi dev main.py
-```
-
-Leave that terminal open. Open a second terminal tab and check it's alive:
+Same on both:
 
 ```bash
-curl http://127.0.0.1:8000/
+uv run uvicorn main:app --reload
 ```
+
+What that command means:
+
+| Part | Meaning |
+|---|---|
+| `uv run` | Run this inside our project's `.venv` |
+| `uvicorn` | The server program that actually handles web requests |
+| `main:app` | Look in the file `main.py` for the variable called `app` |
+| `--reload` | Restart automatically every time you save a file |
+
+You should see `Uvicorn running on http://127.0.0.1:8000`. Leave that terminal open, and
+open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) in your browser. You want:
 
 ```json
 {"message":"Server is up and running"}
 ```
 
 If you see that, you're running MUNDRA. Now open
-[http://127.0.0.1:8000/swagger](http://127.0.0.1:8000/swagger) in your browser. That page
-lists every endpoint we have, and you can call them from there. We'll use it a lot.
+[http://127.0.0.1:8000/swagger](http://127.0.0.1:8000/swagger). That page lists every
+endpoint we have, and you can call them from there. We'll use it a lot.
 
-`fastapi dev` restarts the server by itself every time you save a file, so you never need
-to stop and start it while you're working.
+To stop the server, press `Ctrl+C` in that terminal. If port 8000 is already taken by
+something else, add `--port 8001` to the end and use that port instead.
+
+### 2.8 A note for Windows about the rest of this guide
+
+From section 6 onwards I use `curl` commands written for a Mac terminal (things like
+`export B=...`). These don't work in PowerShell. Git for Windows came with a program called
+**Git Bash** that understands them, so for those sections open Git Bash (it's in the Start
+menu) and `cd` into the `mundra` folder. Everything else, including running the server,
+can stay in PowerShell. Or skip `curl` entirely and use Swagger, which works the same
+everywhere.
 
 ---
 
@@ -200,11 +308,14 @@ def home():
     return {"message": "hello from my first API"}
 ```
 
-Run it:
+Run it, the same way as MUNDRA:
 
 ```bash
-uv run fastapi dev main.py
+uv run uvicorn main:app --reload
 ```
+
+(If MUNDRA is still running on port 8000, stop it with `Ctrl+C` first, or add
+`--port 8001` here.)
 
 Open `http://127.0.0.1:8000/` and `http://127.0.0.1:8000/docs`. The second one is the docs
 page FastAPI built for you from those six lines.
@@ -455,16 +566,26 @@ with `403`, click Authorize again.
 ### 5.2 Making yourself an admin
 
 There's no endpoint that creates admins, on purpose. You make one straight in the
-database. First get a hashed password (we never store real passwords):
+database. First get a hashed password (we never store real passwords) by opening this in
+your browser:
 
-```bash
-curl "http://127.0.0.1:8000/hash_password?password=adminpass123"
+```
+http://127.0.0.1:8000/hash_password?password=adminpass123
 ```
 
-Copy the string it returns, the one starting `$2b$12$`. Then open Postgres:
+Copy the string it shows, the one starting `$2b$12$`, without the quote marks around it.
+Then open Postgres:
+
+**macOS**
 
 ```bash
 psql mundra
+```
+
+**Windows**
+
+```powershell
+psql -U postgres -d mundra
 ```
 
 and at the `mundra=#` prompt type (with your own hash pasted in):
@@ -1172,11 +1293,16 @@ Open a pull request and tag me. I'll review it like any other PR.
 |---|---|---|
 | `pg_isready` says `no response` | Postgres isn't running | Section 2.2 |
 | `connection refused` on port 5432 | Same thing | Section 2.2 |
-| `role "user" does not exist` | `DATABASE_URL` still has the example username | Put your real Postgres username in `.env` (section 2.4) |
-| `database "mundra" does not exist` | You skipped `createdb` | `createdb mundra` |
-| `Field required ... mail_server` | `.env` missing, or run from the wrong folder | Run commands from inside `mundra/`, check `.env` exists |
+| `role "user" does not exist` | `DATABASE_URL` still has the example username | Put your real Postgres username in `.env` (section 2.5) |
+| `password authentication failed for user "postgres"` (Windows) | Wrong password in `DATABASE_URL` | Use the password you set in the Postgres installer |
+| `pg_isready`, `psql` or `createdb` "is not recognized" (Windows) | Postgres isn't on your Path | Add `C:\Program Files\PostgreSQL\16\bin` to Path (section 2.1), then reopen PowerShell |
+| `uv` "is not recognized" or "command not found" | Terminal was opened before uv was installed | Close and reopen the terminal |
+| `database "mundra" does not exist` | You skipped `createdb` | Section 2.4 |
+| `Field required ... mail_server` | `.env` missing, or run from the wrong folder | Run commands from inside `mundra`, check `.env` exists |
 | `relation "delegates" does not exist` | Tables were never created | `uv run alembic upgrade head` |
-| `uv sync` complains about the Python version | Your shell has `UV_PYTHON` set to something else | `echo $UV_PYTHON`, then `UV_PYTHON=3.12 uv sync` |
+| `Address already in use` / port 8000 busy | Another server is already running | Stop it with `Ctrl+C`, or add `--port 8001` |
+| `curl` gives a weird table instead of JSON (Windows) | PowerShell's `curl` isn't the real curl | Use Git Bash (section 2.8), or type `curl.exe` |
+| `uv sync` complains about the Python version | Your terminal has `UV_PYTHON` set to something else | Check it with `echo $UV_PYTHON` (Mac) or `echo $env:UV_PYTHON` (Windows) and remove it |
 | `500 ... Error connecting to localhost on port 465` | No mail server on your laptop. The account was still created. | Ignore it, then `POST /manual_verify?email=...` |
 | `401 Please verify your email!` | Account exists but isn't verified | `POST /manual_verify?email=...` |
 | `403 Could not validate credentials` | Token is wrong or has expired (10 min) | Log in again, or Authorize again in Swagger |
@@ -1211,14 +1337,23 @@ I'd rather you know about these than trip over them. They're all fair game as fu
 
 ### Commands
 
+Same on both:
+
 ```bash
-uv sync                                   # install packages
-uv run fastapi dev main.py                # run the server
-uv run alembic upgrade head               # build or update tables
+uv sync                                               # install packages
+uv run uvicorn main:app --reload                      # run the server
+uv run alembic upgrade head                           # build or update tables
 uv run alembic revision --autogenerate -m "message"   # after changing db_models.py
-psql mundra                               # poke at the database
-psql mundra -c "\dt"                      # list tables
 ```
+
+Opening the database:
+
+| | macOS | Windows |
+|---|---|---|
+| Open a prompt | `psql mundra` | `psql -U postgres -d mundra` |
+| List tables | `psql mundra -c "\dt"` | `psql -U postgres -d mundra -c "\dt"` |
+| Is Postgres up? | `pg_isready` | `pg_isready` |
+| Start Postgres | `brew services start postgresql@16` | `Start-Service postgresql-x64-16` |
 
 ### Every endpoint on one screen
 
