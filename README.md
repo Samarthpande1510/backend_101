@@ -1,778 +1,1267 @@
-# Backend Development 101
+# Part 2: Getting onto MUNDRA
 
-I wrote this for the MUNSoc tech team. It's the guide I wish someone had handed me before
-I started building MUNDRA, our delegate management backend.
+[Part 1](./part-1-backend-fundamentals.md) was the theory. This one is hands on. By the end of today you'll have
+MUNDRA running on your own laptop, you'll have written a small FastAPI app from scratch, and
+you'll have called every single endpoint in our system yourself.
 
-If you know basic Python (variables, functions, loops, maybe classes) but have never built
-a backend, this is aimed at you. I define every term the first time it shows up, because
-the jargon was honestly the hardest part for me at the start.
-
-Most of the examples come from MUNDRA itself rather than made up toy code. That's partly
-because real examples are more useful, and partly because most of the mistakes in here are
-ones I actually made while building it.
+I'm assuming you've never touched FastAPI before. That's fine. Type everything out rather
+than copy pasting. It's slower, and that's the point: your fingers learn the shape of the
+code faster than your eyes do.
 
 ---
 
-## Table of contents
+## Contents
 
-1. [What is a backend, actually?](#1-what-is-a-backend-actually)
-2. [Glossary: the words you'll hear constantly](#2-glossary-the-words-youll-hear-constantly)
-3. [Thinking in systems](#3-thinking-in-systems)
-4. [FastAPI fundamentals](#4-fastapi-fundamentals)
-5. [CRUD, one operation at a time](#5-crud-one-operation-at-a-time)
-6. [app vs router](#6-app-vs-router)
-7. [Quick reference](#7-quick-reference)
-8. [How I'd structure your first backend](#8-how-id-structure-your-first-backend)
-9. [Case study: designing a system from scratch](#9-case-study-designing-a-system-from-scratch)
-10. [Your turn](#10-your-turn)
-11. [Further reading](#11-further-reading)
+1. [What you'll have by the end of today](#1-what-youll-have-by-the-end-of-today)
+2. [Set up your machine](#2-set-up-your-machine)
+3. [Your first FastAPI app (type this out)](#3-your-first-fastapi-app-type-this-out)
+4. [How MUNDRA is laid out](#4-how-mundra-is-laid-out)
+5. [Calling the API from Swagger](#5-calling-the-api-from-swagger)
+6. [How login works](#6-how-login-works)
+7. [Every endpoint, explained](#7-every-endpoint-explained)
+8. [One full story: signup to lunch](#8-one-full-story-signup-to-lunch)
+9. [Exercises on the real code](#9-exercises-on-the-real-code)
+10. [When things break](#10-when-things-break)
+11. [Cheat sheet](#11-cheat-sheet)
 
 ---
 
-## 1. What is a backend, actually?
+## 1. What you'll have by the end of today
 
-Every app you've used has at least two halves.
+- [ ] MUNDRA running at `http://127.0.0.1:8000`
+- [ ] A tiny FastAPI app you wrote yourself, with all four CRUD operations
+- [ ] An admin account and a delegate account on your local database
+- [ ] Every endpoint in section 7 called at least once
+- [ ] One new endpoint added to MUNDRA by you (section 9)
 
-The **frontend** is what you see and tap. The login screen, the buttons, the text fields.
+Tick them off as you go.
 
-The **backend** is the thing the frontend talks to over the internet to actually do
-anything. Check a password. Save a new delegate. Look up who's registered for a committee.
+---
 
-The reason we can't just do all of this in the app is trust. The frontend runs on a
-stranger's phone and anyone can tamper with it. The backend is the part we control,
-running on a server we own, and it's the thing that decides what's actually allowed to
-happen.
+## 2. Set up your machine
 
-```mermaid
-sequenceDiagram
-    participant App as Mobile App<br/>(frontend)
-    participant API as MUNDRA<br/>(backend)
-    participant DB as Postgres<br/>(database)
+These commands are for macOS. If you're on Windows, install
+[WSL](https://learn.microsoft.com/en-us/windows/wsl/install) first and run everything
+inside the Ubuntu terminal it gives you. Come find me if you get stuck here, setup is the
+most annoying part and it's not worth losing a day to.
 
-    App->>API: POST /login<br/>{email, password}
-    API->>DB: SELECT * FROM users WHERE email = ...
-    DB-->>API: matching row
-    API->>API: check password hash
-    API-->>App: {access_token: "eyJ..."}
+### 2.1 Install the tools
+
+```bash
+# Homebrew, if you don't have it: https://brew.sh
+
+brew install git
+brew install postgresql@16
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-That round trip is the whole pattern. App asks, backend decides, database stores, backend
-answers. Everything else in this doc is just detail around that one loop.
+What each one is:
 
-A backend has three jobs, always:
-
-1. Talk to the outside world. Accept requests, send back responses. This is the API layer.
-2. Enforce the rules. Is this password right? Can this delegate see this data? This is the
-   business logic.
-3. Remember things. Save data so it survives a restart. That's the database.
-
----
-
-## 2. Glossary: the words you'll hear constantly
-
-Read this once, then come back to it. I grouped the terms instead of alphabetising them
-because they build on each other.
-
-### The network conversation
-
-| Term | What it means |
+| Tool | What it's for |
 |---|---|
-| **Client** | Whatever is making the request. Our mobile app, a browser, `curl`, the Swagger page. Not always a person, it could be another server. |
-| **Server** | The program listening for requests and answering them. For us that's `uvicorn` running the app. |
-| **Request** | One message from client to server saying "please do this". It has a method, a path, headers, and sometimes a body. |
-| **Response** | The answer. A status code, headers, and usually a body (normally JSON). |
-| **HTTP** | The language requests and responses are written in. Nearly everything on the web speaks it. |
-| **Endpoint** (or **route**) | One specific thing you can ask the server to do. It's a path plus a method together. `POST /login` is one endpoint, `GET /login` would be a completely different one. |
-| **Method** | The verb of the request. Table below. |
-| **Path** | The noun. `/delegates/42` means "the delegate with id 42". |
-| **Status code** | A 3 digit number saying what happened. `200` is fine, `404` is not found, `500` means we broke something. |
-| **Header** | Metadata attached to the request, separate from the content. `Authorization: Bearer <token>` is a header. It's *about* the request rather than being the request's subject. |
-| **Body** (or **payload**) | The actual content being sent. The delegate's name, the password, the JSON blob. A `GET` usually doesn't have one. |
-| **JSON** | The standard text format for structured data, like `{"email": "ada@example.com", "verified": true}`. If you've written a Python dict you already know the shape. |
+| **git** | Getting the code, and sending your changes back |
+| **postgresql** | The database. Runs quietly in the background on your laptop |
+| **uv** | Installs Python and all our packages for you, and runs commands inside the project |
 
-### HTTP methods
+Close and reopen your terminal after installing uv so it shows up.
 
-| Method | Means | Example |
-|---|---|---|
-| `GET` | Read something. Never changes data. | `GET /delegates/me` to fetch my profile |
-| `POST` | Create something new. | `POST /register` to make an account |
-| `PATCH` | Update part of something. | `PATCH /delegates/{id}` to change one field |
-| `PUT` | Replace something entirely. | `PUT /delegates/{id}` to overwrite the record |
-| `DELETE` | Remove something. | `DELETE /account` |
+### 2.2 Start Postgres
 
-### Status codes
-
-| Range | Whose fault | The ones you'll actually see |
-|---|---|---|
-| `2xx` | Nobody, it worked | `200` OK, `201` Created (a `POST` that made something) |
-| `4xx` | The client's | `400` bad request, `401` not logged in, `403` logged in but not allowed, `404` doesn't exist, `409` conflict (like "already registered") |
-| `5xx` | Ours | `500` something broke that shouldn't have |
-
-The 4xx vs 5xx split matters more than it looks. A `404` means you asked correctly and the
-thing just isn't there. A `500` means our code has a bug. When something breaks, the first
-thing I check is which of the two it is, because it tells me whether to go fix my request
-or go read the server logs.
-
-### Parts of a backend
-
-| Term | What it means |
-|---|---|
-| **API** | The full set of endpoints a backend exposes. The menu of things a client can ask for. |
-| **REST** | A style of designing APIs where each endpoint is a "resource" and the method says what to do to it. `GET /delegates/{id}`, `PATCH /delegates/{id}`, `DELETE /delegates/{id}`. Same resource, three verbs. |
-| **Router** | A named group of related endpoints, usually one file. Section 6 goes into this properly. |
-| **Middleware** | Code that runs on every request before it reaches your endpoint. Logging, rate limiting, CORS. |
-| **Dependency injection** | Where a route declares something it needs ("the current logged in user") and the framework works out how to supply it before your function runs. In FastAPI this is `Depends(...)`. |
-| **Database** | Where data lives permanently. Survives a restart, unlike a Python variable. |
-| **ORM** | Object Relational Mapper. A library letting you treat database rows as Python objects instead of writing SQL by hand. SQLAlchemy is the usual one in Python. |
-| **Schema / Model** | A definition of the shape of some data. Which fields, what types. You normally end up with **two different kinds**: Pydantic models for the API's shape, ORM models for the database's shape. They are not the same thing and mixing them up confused me for a solid week. |
-| **Migration** | A recorded change to the database structure, like adding a column. Alembic is the tool we use. |
-
-### Auth
-
-| Term | What it means |
-|---|---|
-| **Authentication** (authn) | Who are you? Proving identity, usually with email and password. |
-| **Authorization** (authz) | What are you allowed to do? We might know who you are and still not let you see someone else's data. |
-| **Token** | A piece of proof handed out after login so you don't have to send your password on every single request. |
-| **JWT** | JSON Web Token. A specific token format. It's a signed blob of JSON, so the server can check nobody tampered with it without even hitting the database. |
-| **Bearer token** | The convention of sending a token as `Authorization: Bearer <token>`. "Bearer" means whoever holds it gets treated as authenticated, like a metro ticket rather than a photo ID. |
-| **Hashing** | A one way scramble. `hash("password123")` always gives the same output but you can't reverse it. We store passwords hashed so that even we can't read them. |
-
----
-
-## 3. Thinking in systems
-
-Before writing code I now force myself to answer four questions in order. I didn't do this
-on the first version of MUNDRA and I paid for it in rewrites.
-
-### Step 1: what are the entities?
-
-An entity is a thing your system has to remember. Nouns, not verbs. For MUNDRA that's a
-**Delegate**, a **User** (login credentials), a **Room**, a **Committee**.
-
-Write these on paper before anything else. If you can't name the nouns, you don't
-understand the problem yet, and no amount of typing will fix that.
-
-### Step 2: what can happen to each one?
-
-For each entity, what does the system actually need to do? Usually some subset of Create,
-Read, Update, Delete (see section 5). Not everything needs all four. Our room allocations
-are read only from the API's side, nobody creates a room over HTTP, because rooms get
-decided once in a planning meeting and barely change after that.
-
-### Step 3: who's allowed to do what?
-
-This is where auth shows up. A delegate can edit their own profile but not someone else's.
-An admin can see everyone. I write it as a table before I write any code:
-
-| Action | Delegate | Admin |
-|---|---|---|
-| View own profile | yes | yes |
-| View another delegate's profile | no | yes |
-| Update own profile | yes | yes |
-| List all delegates | no | yes |
-
-Every "no" in that table is a permission check you have to write. Every row you forget to
-think about is a hole you ship.
-
-### Step 4: draw the flow first
-
-For anything non trivial I sketch the request lifecycle before coding. Here's registration
-in MUNDRA:
-
-```mermaid
-flowchart TD
-    A["POST /register<br/>{firstname, lastname, email, password}"] --> B{Already a User<br/>with this email?}
-    B -- yes --> C["409 Conflict"]
-    B -- no --> D{Already a Delegate<br/>with this email?}
-    D -- no --> E[Create a Delegate row]
-    D -- yes --> F[Reuse existing Delegate]
-    E --> G[Create a User row<br/>password hashed]
-    F --> G
-    G --> H[Send verification email]
-    H --> I["201 Created"]
+```bash
+brew services start postgresql@16
+pg_isready
 ```
 
-Drawing this is what made me realise why `Delegate` and `User` have to be separate tables.
-A delegate can exist before anyone makes login credentials for them, for example when an
-admin pre registers someone. If I'd modelled those as one thing, "admin pre registers a
-delegate" would have been impossible to represent without a fake password.
+You want `pg_isready` to say `accepting connections`. If `brew services` throws a weird
+Ruby error (it did on my machine), start it directly instead:
 
-That's what system design actually is. Not memorising patterns, just asking what
-distinctions your data genuinely needs to make.
-
-### The three layers
-
-Once you've answered those, the code tends to fall into the same three layers no matter
-what framework you use:
-
-```mermaid
-flowchart LR
-    subgraph API["API layer"]
-        direction TB
-        A1["Receives the request<br/>Validates its shape<br/>Decides the response"]
-    end
-    subgraph Logic["Business logic"]
-        direction TB
-        L1["'Is this allowed?'<br/>'What should happen?'"]
-    end
-    subgraph Data["Data layer"]
-        direction TB
-        D1["Reads and writes the database<br/>Knows nothing about HTTP"]
-    end
-    API --> Logic --> Data
+```bash
+pg_ctl -D /opt/homebrew/var/postgresql@16 -l /opt/homebrew/var/log/postgresql@16.log start
 ```
 
-The bit I'd emphasise: the data layer should have no idea HTTP exists. Its functions
-return data or raise a normal Python exception, and it's the API layer's job to turn that
-into a status code. Keep that line clean and you can test your logic without starting a
-server, and swap your database without touching your routes.
+### 2.3 Get the code and install packages
+
+```bash
+git clone https://github.com/munsoc-mpstme/mundra
+cd mundra
+uv sync
+```
+
+`uv sync` reads `pyproject.toml`, downloads the right Python version, and installs
+everything into a `.venv` folder inside the project. You never have to activate anything,
+you just put `uv run` in front of commands.
+
+### 2.4 Create your database
+
+```bash
+createdb mundra
+psql mundra -c "select current_user;"
+```
+
+The second command prints your Postgres username. On a Mac it's usually the same as your
+laptop username. Remember it, you need it in the next step.
+
+### 2.5 Make your `.env`
+
+```bash
+cp sample.env .env
+```
+
+Open `.env` and fill it in like this. Replace `yourname` with the username from step 2.4.
+
+```ini
+SECRET_KEY=paste-a-long-random-string-here
+DATABASE_URL=postgresql+psycopg2://yourname@localhost:5432/mundra
+MAIL_SERVER=localhost
+MAIL_PASSWORD=
+URL=http://localhost:8000
+DOCS_URL=/swagger
+REDOC_URL=/docs
+```
+
+To get a random secret key:
+
+```bash
+openssl rand -hex 32
+```
+
+Two things I learned the hard way here:
+
+- **Don't leave lines blank if you don't mean empty.** `DOCS_URL=` does not mean "use the
+  default", it means "set this to an empty string", and it breaks the docs page. Either
+  fill it in or delete the line.
+- **Never commit `.env`.** It's already in `.gitignore`. Keep it that way.
+
+`MAIL_SERVER=localhost` means emails won't actually send on your laptop. That's fine,
+section 10 explains what that looks like and how to work around it.
+
+### 2.6 Create the tables
+
+```bash
+uv run alembic upgrade head
+psql mundra -c "\dt"
+```
+
+Alembic runs every migration file in `alembic/versions/` and builds the tables. The
+second command lists them. You should see `admins`, `delegates`, `users`,
+`mun_experiences`, `mm_delegates`, `mm_mun_experiences`, `refresh_tokens` and
+`alembic_version`.
+
+### 2.7 Run it
+
+```bash
+uv run fastapi dev main.py
+```
+
+Leave that terminal open. Open a second terminal tab and check it's alive:
+
+```bash
+curl http://127.0.0.1:8000/
+```
+
+```json
+{"message":"Server is up and running"}
+```
+
+If you see that, you're running MUNDRA. Now open
+[http://127.0.0.1:8000/swagger](http://127.0.0.1:8000/swagger) in your browser. That page
+lists every endpoint we have, and you can call them from there. We'll use it a lot.
+
+`fastapi dev` restarts the server by itself every time you save a file, so you never need
+to stop and start it while you're working.
 
 ---
 
-## 4. FastAPI fundamentals
+## 3. Your first FastAPI app (type this out)
 
-FastAPI is the Python framework we use to build the API. Three reasons it's worth learning
-first:
+Before touching MUNDRA, build something tiny yourself. It makes everything in MUNDRA make
+sense afterwards. Do this in a separate folder, not inside `mundra`.
 
-1. You describe your data with normal Python type hints and it validates incoming requests
-   for you. Send the wrong type and the client gets a clear `422` before your function even
-   runs. You never write that validation by hand.
-2. You get interactive docs for free. That's the Swagger page, and because it's generated
-   from the real code it can't go stale.
-3. It's built on async, so it handles a lot of requests at once. You don't need to
-   understand async deeply to start.
+```bash
+cd ~
+mkdir fastapi-playground
+cd fastapi-playground
+uv init
+uv add "fastapi[standard]"
+```
 
-### The smallest possible app
+### 3.1 Hello world
+
+Open `main.py`, delete whatever is in it, and type this:
 
 ```python
 from fastapi import FastAPI
 
 app = FastAPI()
 
+
 @app.get("/")
-def read_root():
-    return {"message": "hello"}
+def home():
+    return {"message": "hello from my first API"}
 ```
 
-Run it with `uvicorn main:app --reload` and you have a working API. Four things happening:
+Run it:
 
-- `app = FastAPI()` creates the application, the thing uvicorn actually runs.
-- `@app.get("/")` is a decorator. It registers the function underneath to handle `GET`
-  requests to `/`. This pairing is called a path operation and it's the basic unit of the
-  whole framework.
-- The function name doesn't matter, you never call it yourself.
-- Whatever you return gets turned into JSON automatically. Return a dict, get a JSON
-  object.
+```bash
+uv run fastapi dev main.py
+```
 
-### Path params vs query params vs body
+Open `http://127.0.0.1:8000/` and `http://127.0.0.1:8000/docs`. The second one is the docs
+page FastAPI built for you from those six lines.
 
-This one took me embarrassingly long to internalise, so learn it as one comparison:
+### 3.2 A path parameter
+
+Add this under `home`:
 
 ```python
-@app.get("/delegates/{id}")           # path parameter
-def get_delegate(id: str):
-    ...
-
-@app.get("/delegates")
-def list_delegates(format: str = ""):  # query parameter
-    ...
-
-@app.post("/register")
-def register(user: User):              # request body
-    ...
+@app.get("/hello/{name}")
+def hello(name: str):
+    return {"message": f"hello {name}"}
 ```
 
-| Kind | Where it goes | Example | Use it for |
-|---|---|---|---|
-| **Path param** | In the URL path, in braces | `/delegates/42` gives `id="42"` | Saying *which* specific thing |
-| **Query param** | After a `?` as key=value | `/delegates?format=csv` gives `format="csv"` | Optional filters, formatting, paging |
-| **Body** | The JSON payload | `{"email": "...", "password": "..."}` | Sending a chunk of structured data, nearly always on POST or PATCH |
+Save, then open `http://127.0.0.1:8000/hello/ada`. Whatever you put after `/hello/` ends up
+in the `name` variable.
 
-FastAPI works out which is which purely from how you write the function signature. A
-parameter matching a `{name}` in the path is a path param, a parameter typed as a Pydantic
-model is the body, anything else simple becomes a query param. There's no config to write.
-
-### Pydantic models
+### 3.3 A query parameter
 
 ```python
-from pydantic import BaseModel, EmailStr
-
-class User(BaseModel):
-    firstname: str
-    lastname: str
-    email: EmailStr
-    password: str
+@app.get("/add")
+def add(a: int, b: int):
+    return {"result": a + b}
 ```
 
-This is not a database table. It's a description of a shape. When a route says
-`user: User`, FastAPI reads the JSON body, checks every field is present and the right
-type, and if anything's wrong it sends back a `422` naming the exact field that failed.
-If everything's fine you get a real `User` object with autocomplete.
+Try `http://127.0.0.1:8000/add?a=2&b=3`. Now try `?a=2&b=banana`. You get a `422` error
+explaining that `b` isn't a number. You didn't write that check, FastAPI did it because
+you typed `b: int`.
 
-Describing the shape once and getting validation, error messages and docs out of it is the
-single biggest reason I'd pick FastAPI for a first backend.
+### 3.4 Full CRUD on something small
+
+Now the real exercise. We'll keep a list of committees in a plain Python dict. No database
+yet, that comes later. Replace everything in `main.py` with this:
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+
+
+class Committee(BaseModel):
+    name: str
+    agenda: str
+    seats: int
+
+
+committees: dict[int, Committee] = {}
+next_id = 1
+
+
+# CREATE
+@app.post("/committees", status_code=201)
+def create_committee(committee: Committee):
+    global next_id
+    committees[next_id] = committee
+    next_id += 1
+    return {"id": next_id - 1, **committee.model_dump()}
+
+
+# READ all
+@app.get("/committees")
+def list_committees():
+    return [{"id": cid, **c.model_dump()} for cid, c in committees.items()]
+
+
+# READ one
+@app.get("/committees/{committee_id}")
+def get_committee(committee_id: int):
+    if committee_id not in committees:
+        raise HTTPException(status_code=404, detail="Committee not found")
+    return {"id": committee_id, **committees[committee_id].model_dump()}
+
+
+# UPDATE
+@app.put("/committees/{committee_id}")
+def update_committee(committee_id: int, committee: Committee):
+    if committee_id not in committees:
+        raise HTTPException(status_code=404, detail="Committee not found")
+    committees[committee_id] = committee
+    return {"id": committee_id, **committee.model_dump()}
+
+
+# DELETE
+@app.delete("/committees/{committee_id}")
+def delete_committee(committee_id: int):
+    if committee_id not in committees:
+        raise HTTPException(status_code=404, detail="Committee not found")
+    del committees[committee_id]
+    return {"message": "Committee deleted"}
+```
+
+Go to `/docs` and, using only the Swagger page:
+
+1. Create UNSC, DISEC and UNHRC with `POST /committees`
+2. List them with `GET /committees`
+3. Fetch one with `GET /committees/2`
+4. Change DISEC's seats with `PUT /committees/2`
+5. Delete one, then try to fetch it again and check you get a `404`
+
+Then restart the server and list them again. They're gone. That's why we need a database,
+a dict only lives as long as the program does.
+
+### 3.5 Split it into a router
+
+Last step, and it's exactly how MUNDRA is organised. Make a folder and two files:
+
+```
+fastapi-playground/
+├── main.py
+└── routers/
+    ├── __init__.py        (leave this empty)
+    └── committees.py
+```
+
+Move all five committee endpoints into `routers/committees.py`, with two changes:
+
+```python
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+router = APIRouter()          # was: app = FastAPI()
+
+# ...the class, the dict and next_id stay the same...
+
+
+@router.post("", status_code=201)     # was: @app.post("/committees", ...)
+def create_committee(committee: Committee):
+    ...
+
+
+@router.get("/{committee_id}")        # was: @app.get("/committees/{committee_id}")
+def get_committee(committee_id: int):
+    ...
+```
+
+Every `@app.` becomes `@router.`, and every path loses the `/committees` at the front.
+Now `main.py` becomes:
+
+```python
+from fastapi import FastAPI
+
+from routers.committees import router as committees_router
+
+app = FastAPI()
+app.include_router(committees_router, prefix="/committees", tags=["Committees"])
+```
+
+Check `/docs`. The URLs haven't changed at all, because `prefix="/committees"` puts the
+part you removed back on. That's the whole trick behind MUNDRA's `routers/` folder.
 
 ---
 
-## 5. CRUD, one operation at a time
+## 4. How MUNDRA is laid out
 
-CRUD is Create, Read, Update, Delete. Four things you can do to a piece of data. Almost
-every resource in almost every backend needs some subset of them.
+Now open the `mundra` folder in VS Code. Here's what everything is:
 
-### Create, with POST
+```
+mundra/
+├── main.py              creates the app and plugs in every router
+├── routers/             the actual endpoints, one file per area
+│   ├── auth.py          signup, login, tokens, passwords
+│   ├── delegates.py     delegate profiles
+│   ├── mumbaimun.py     Mumbai MUN registration
+│   ├── qr.py            QR codes and the scanner page
+│   ├── food.py          meal check in
+│   ├── admin.py         admin tools
+│   └── dynamic_data.py  rooms and schedule
+├── auth.py              password hashing, tokens, "who is logged in"
+├── database.py          every function that reads or writes the database
+├── db_models.py         the tables
+├── models.py            the shapes of data going in and out of the API
+├── config.py            reads your .env
+├── mails.py             sends emails
+├── utils.py             makes QR code images
+├── rate_limiter.py      stops people spamming login
+├── templating.py        for the few HTML pages we serve
+├── alembic/             migrations
+├── templates/           those HTML pages
+├── data/                rooms.json and schedule.json
+└── static/              images
+```
+
+Look at `main.py` first. It's about 60 lines and it's the table of contents for the whole
+app. These lines are the important ones:
 
 ```python
-@router.post("/delegates", status_code=201)
-def create_delegate(delegate: DelegateCreate):
-    new_delegate = database.add_delegate(delegate)
-    return new_delegate
-```
-
-`status_code=201` is the convention for a POST that successfully made something new. The
-body gets validated against `DelegateCreate` before the function runs.
-
-### Read, with GET
-
-```python
-@router.get("/delegates/{id}")
-def get_delegate(id: str):
-    delegate = database.get_delegate_by_id(id)
-    if not delegate:
-        raise HTTPException(status_code=404, detail="Delegate not found")
-    return delegate
-```
-
-Reads never change data. If a GET modifies something, that's a design smell.
-`raise HTTPException(...)` is how you return anything other than a 200, FastAPI catches it
-and builds the right response.
-
-### Update, with PATCH
-
-```python
-@router.patch("/delegates/{id}")
-def update_delegate(id: str, firstname: str = ""):
-    delegate = database.get_delegate_by_id(id)
-    if not delegate:
-        raise HTTPException(status_code=404, detail="Delegate not found")
-    if firstname != "":
-        delegate.firstname = firstname
-    return database.update_delegate_by_id(id, delegate)
-```
-
-PATCH is a partial update, you only send the fields you want changed. PUT means replace
-the whole thing. Note the order here: fetch, check it exists, then modify. Don't write to
-something you haven't confirmed is there.
-
-### Delete
-
-```python
-@router.delete("/delegates/{id}", status_code=200)
-def delete_delegate(id: str):
-    delegate = database.get_delegate_by_id(id)
-    if not delegate:
-        raise HTTPException(status_code=404, detail="Delegate not found")
-    database.delete_delegate(id)
-    return {"message": "Delegate deleted"}
-```
-
-Same fetch, check, act shape as update.
-
-Deciding what a delete actually removes is a real design decision and worth arguing about
-before you build it. In MUNDRA, `DELETE /account` only removes the login credentials, not
-the delegate's conference registration. Someone can delete their account without us losing
-the record that they attended. That was deliberate, and it's the kind of thing that's
-painful to change later.
-
-### They all have the same skeleton
-
-```
-1. Take the input (path param, query param, body)
-2. Fetch whatever you need to check
-3. Check it's allowed (does it exist, are you permitted)
-4. Do the work
-5. Return with the right status code
-```
-
-Once you can see that shape under any endpoint, reading unfamiliar backend code gets a lot
-faster. You're just working out which lines are which step.
-
----
-
-## 6. app vs router
-
-This is the question I get asked most, so it gets its own section.
-
-### FastAPI() is the app
-
-```python
-app = FastAPI(title="MUNDRA")
-```
-
-There's exactly one of these in a project. It's what uvicorn runs. It holds the global
-config: the title, whether docs are on, what middleware runs on every request, and the
-final assembled list of every endpoint in the system.
-
-### APIRouter() is a router
-
-```python
-# routers/delegates.py
-router = APIRouter()
-
-@router.get("/me")
-def get_current_delegate(...):
-    ...
-```
-
-A router looks almost identical to the app. Same decorators, same rules. The one real
-difference is that a router can't run on its own. It's a portable bag of endpoints that
-has to be attached to the actual app before it does anything:
-
-```python
-# main.py
-from routers.delegates import router as delegates_router
-
+app.include_router(auth_router, tags=["Auth"])
 app.include_router(delegates_router, prefix="/delegates", tags=["Delegates"])
+app.include_router(mumbaimun_router, prefix="/mumbaimun", tags=["Mumbai MUN"])
+app.include_router(qr_router, tags=["QR"])
+app.include_router(food_router, tags=["Food"])
+app.include_router(admin_router, tags=["Admin"])
+app.include_router(dynamic_data_router, tags=["Dynamic Data"])
 ```
 
-That line is doing two things worth knowing about:
+Same pattern you just built in 3.5. So if you want to know where `GET /delegates/me` lives,
+it's `routers/delegates.py`, on a function decorated `@router.get("/me")`.
 
-`prefix="/delegates"` sticks `/delegates` on the front of every path inside that router.
-The route written as `@router.get("/me")` actually becomes `GET /delegates/me`. So the
-router file never repeats `/delegates` on every line.
+### The three files that confuse everyone
 
-`tags=["Delegates"]` is cosmetic but useful. It groups those endpoints together on the
-Swagger page instead of leaving one long undifferentiated list.
-
-### Why split at all
-
-Because a real backend piles up endpoints fast and one file holding all of them becomes
-impossible to read or review. MUNDRA was a single 850 line `app.py` for a while and it was
-genuinely painful to work in. It's now a 40 line `main.py` plus seven small router files:
-
-```
-main.py                    creates the app, includes every router
-routers/
-    auth.py                register, login, refresh, logout
-    delegates.py           delegate profile CRUD
-    mumbaimun.py           conference registration
-    qr.py, food.py         QR codes, meal check in
-    admin.py               admin only utilities
-    dynamic_data.py        static JSON data
-```
-
-Nothing about what the API does changed. Only where the code lives. But now "where do I
-add a login endpoint" has an obvious answer, and two people can work on different features
-without fighting over the same file.
-
-### Rule of thumb
-
-| Situation | Use |
-|---|---|
-| Wiring the app together: title, middleware, which routers exist | `app`, in `main.py`, and only there |
-| Defining endpoints for a specific resource | a `router`, in its own file under `routers/` |
-| A tiny prototype with three endpoints | just use `app` directly. Don't build a routers folder for a toy. Split once it outgrows one screen. |
-
-The way I think about it: `app` is the building, a `router` is one floor of offices in it.
-Organised, self contained, and useless without the building around it.
-
----
-
-## 7. Quick reference
-
-| I want to | Use |
-|---|---|
-| Get one thing by id | `GET /resource/{id}`, path param |
-| Get a filtered list | `GET /resource?filter=value`, query param |
-| Create something | `POST /resource`, body, `status_code=201` |
-| Change part of something | `PATCH /resource/{id}` |
-| Remove something | `DELETE /resource/{id}` |
-| Describe incoming JSON | a Pydantic `BaseModel` |
-| Require login on a route | `Depends(get_current_user)` as a parameter |
-| Group related endpoints | `APIRouter()` in its own file |
-| Wire the app together | `FastAPI()`, once, in `main.py` |
-| Return an error | `raise HTTPException(status_code=..., detail="...")` |
-
----
-
-## 8. How I'd structure your first backend
-
-### The order I build things in now
-
-My first attempt at this went badly. I wrote about fifteen endpoints, then found out my
-database connection had been misconfigured the entire time and half of what I'd written
-had to change. So: build depth before breadth. Get one endpoint working end to end, then
-repeat.
-
-| # | Build | Why here |
+| File | What's in it | Think of it as |
 |---|---|---|
-| 1 | The entity list, on paper | No code yet. If you can't name the nouns, code won't save you. |
-| 2 | `config.py` | Reads your env vars. Everything else needs settings, the DB url, the secret key. |
-| 3 | `database.py` | Connection and session setup. Nothing touches data without it. |
-| 4 | `db_models.py` | Your tables as Python classes. |
-| 5 | Your first migration | `alembic revision --autogenerate`, then `alembic upgrade head`. Now the tables physically exist. |
-| 6 | `models.py` | The Pydantic shapes the API accepts and returns. |
-| 7 | `main.py` plus one router with ONE endpoint | The whole pipe, end to end. Do not skip this. |
-| 8 | Everything else | Now adding endpoints is repetitive instead of risky. |
+| `models.py` | Pydantic classes | What the app sends us and what we send back |
+| `db_models.py` | SQLAlchemy classes | What's actually stored in Postgres |
+| `database.py` | Plain functions | The translator between the two |
 
-Step 7 is the one that saves you. A single working endpoint that reads one row proves your
-config, connection, models, migration, routing and server are all correct at the same
-time. After that, any bug is in the endpoint you just wrote rather than buried somewhere
-in the foundations.
+A route never talks to Postgres directly. It calls a function in `database.py`, and gets a
+`models.py` object back. Keep that in your head and the code reads much more easily.
 
-### Where files go
+### Who uses MUNDRA
 
-This is the layout I'd use from day one:
+Three kinds of people hit our API, and you'll see all three in section 7:
 
-```
-your-project/
-├── main.py              creates the app, includes routers, nothing else
-├── config.py            settings read from .env
-├── database.py          engine, session, data access functions
-├── db_models.py         SQLAlchemy tables
-├── models.py            Pydantic request and response shapes
-├── auth.py              hashing, tokens, get_current_user
-├── routers/
-│   ├── __init__.py
-│   ├── users.py         one file per resource
-│   └── items.py
-├── alembic/             migration scripts. COMMIT THESE.
-├── alembic.ini
-├── .env                 real secrets. never committed.
-├── .env.example         same keys, empty values. always committed.
-├── .gitignore
-├── pyproject.toml       dependencies
-└── README.md
-```
-
-The reasoning behind it:
-
-One file per resource in `routers/`, so "where do I add a login endpoint" is answerable
-without reading any code.
-
-`main.py` stays small. It wires things together, it doesn't define behaviour. If it's
-growing, something belongs in a router.
-
-`.env.example` matters more than people think. It's the only way a new teammate knows
-which variables they need to set. Same keys as your real `.env`, values stripped out.
-
-Commit your migrations. They're the history of your schema. Someone pulls your branch,
-runs `alembic upgrade head`, and their database matches yours exactly.
-
-### When to grow it
-
-Don't build folders you don't need yet. But eventually:
-
-| Add | When |
+| Who | How they use it |
 |---|---|
-| `services/` | Business logic gets complex enough that routes are hard to read. Routes call services, services hold the "what should happen". |
-| `tests/` | As early as you can stand, honestly. |
-| `schemas/` split out of `models.py` | Once you have 10 or more Pydantic models and one file gets unwieldy. |
-
-### Things I'd do from the start
-
-| Practice | Why |
-|---|---|
-| Keep routes thin | A route should read input, check permission, call a function, return. Forty lines of logic in a route belongs in `database.py` or a service. |
-| Data layer never raises `HTTPException` | `database.py` shouldn't know HTTP exists. It returns data or `None`, the router decides `None` means 404. This is what lets you test logic without a server. |
-| Separate input and output models | See mistake 1 below. |
-| Every schema change is a migration | Never edit the database by hand. If it isn't in `alembic/versions/`, it doesn't exist on anyone else's machine. |
-| Return correct status codes | 201 created, 404 missing, 403 not allowed. Clients branch on these, and so will you in three months. |
-| Never log tokens or passwords | They end up in log files, which end up in screenshots, which end up in group chats. |
-| Write the error path first | Write `if not found: raise 404` before the happy path. It's the half everyone forgets and the half that breaks in production. |
-
-### Five mistakes I've made or watched happen
-
-**1. One Pydantic model for both input and output.** You accept a `User` with a `password`
-field and then return a `User` from `GET /users/{id}`, and now your API serves password
-hashes to anybody who asks. Use `UserCreate` with the password for input and `UserPublic`
-without it for output. Two models, always.
-
-**2. Editing the database by hand.** Works on your laptop, works nowhere else, and nobody
-can reproduce your schema. Migrations every time.
-
-**3. Wrapping everything in `try/except Exception` and returning 500.** This swallows your
-own deliberate 404s and 403s and reports them as server errors, so every bug looks
-identical when you're debugging. Let real errors bubble up, only catch what you can
-actually handle.
-
-**4. Committing `.env`.** Your secret key is now in git history permanently, and deleting
-the file in a later commit does not remove it. Gitignore it on day one. If it does get
-committed, rotate the secret rather than just deleting the line.
-
-**5. Assuming a blank env var means unset.** `DOCS_URL=` in a `.env` file sets it to an
-empty string, which overrides your code's default instead of falling back to it. This one
-cost me a confusing half hour. If you want the default, delete the line entirely.
+| **Delegates** | Through the Delego app. Sign up, log in, edit their profile, see their QR code, rooms and schedule. |
+| **Admins (OC)** | Through Swagger or scripts. See every delegate, export CSVs, take backups. |
+| **Volunteers on the day** | Through the `/scan` and `/food` web pages, to check people in for meals. |
 
 ---
 
-## 9. Case study: designing a system from scratch
+## 5. Calling the API from Swagger
 
-Here's how a design conversation actually goes, using the four steps from section 3. Read
-this, then do the exercise in section 10 yourself.
+Open [http://127.0.0.1:8000/swagger](http://127.0.0.1:8000/swagger). Every endpoint is
+listed, grouped by the tags from `main.py`.
 
-> **The brief:** "We want to track attendance and points for committee sessions."
+To call one: click it, click **Try it out**, fill in the fields, click **Execute**. Below
+that you'll see the exact `curl` command Swagger ran, the status code, and the response.
+Reading those `curl` commands is a good way to learn what a request actually looks like.
 
-That's all you get. Realistically that's all you'll ever get. The job is turning it into a
-design.
+### 5.1 Logging in inside Swagger
 
-### Step 1: ask questions before designing anything
+Endpoints with a padlock icon need you to be logged in. At the top right there's an
+**Authorize** button. Click it and you get a username and password form.
 
-A vague brief is hiding a dozen decisions. The questions I'd ask:
+- **username**: your email (the field is called username for historical reasons, it's an
+  OAuth2 standard thing)
+- **password**: your password
+- leave everything else blank
 
-| Question | Answer | Why it changes things |
+Click Authorize. Swagger calls `POST /login` for you, keeps the token, and attaches it to
+every padlocked request from then on. The padlocks close.
+
+Tokens expire after 10 minutes (section 6), so if padlocked calls suddenly start failing
+with `403`, click Authorize again.
+
+### 5.2 Making yourself an admin
+
+There's no endpoint that creates admins, on purpose. You make one straight in the
+database. First get a hashed password (we never store real passwords):
+
+```bash
+curl "http://127.0.0.1:8000/hash_password?password=adminpass123"
+```
+
+Copy the string it returns, the one starting `$2b$12$`. Then open Postgres:
+
+```bash
+psql mundra
+```
+
+and at the `mundra=#` prompt type (with your own hash pasted in):
+
+```sql
+INSERT INTO admins (email, password)
+VALUES ('admin@munsoc.test', '$2b$12$paste-the-rest-of-your-hash-here');
+```
+
+Type `\q` to leave. Now you can Authorize in Swagger as `admin@munsoc.test` with
+`adminpass123`.
+
+### 5.3 Making yourself a delegate
+
+In Swagger, open `POST /mumbaimun/register`, Try it out, and send:
+
+```json
+{
+  "firstname": "Ada",
+  "lastname": "Lovelace",
+  "email": "ada@munsoc.test",
+  "password": "password123"
+}
+```
+
+**You will get a 500 error about port 465.** That's expected on your laptop, it's the email
+step failing because there's no real mail server. The account was still created. Section
+10 has the full explanation. Log out of the admin in Authorize, and log back in as Ada.
+
+---
+
+## 6. How login works
+
+This is the bit most people find confusing, so here it is slowly.
+
+When you log in, you get **two** tokens back:
+
+| Token | Lives for | What it's for |
 |---|---|---|
-| Who uses this? | Chairs mark attendance, delegates view their own record | Two roles, so we need a permission matrix |
-| How many delegates? | ~200, 10 committees, 3 days | Small. No caching, no scaling complexity needed |
-| Per session or per day? | Per session, 9 total | Attendance is per delegate per session, not one flag |
-| Do we need history? | Yes, "how many sessions did Ada miss" | Rules out storing a running count |
-| Who awards points, can they be revoked? | Chairs award, and mistakes happen so yes | Points need an audit trail, not a single total |
+| **access token** | 10 minutes | Sent with every request to prove who you are |
+| **refresh token** | 7 days | Only used to get a new access token when the old one runs out |
 
-Every one of those answers killed a design that would otherwise have seemed fine. Fifteen
-minutes of questions saves a migration later.
-
-### Step 2: entities and shape
-
-From those answers: **Delegate**, **Committee**, **Session**, **AttendanceRecord**,
-**PointsAward**.
+Why two? If someone steals your access token, it's useless to them within 10 minutes. The
+refresh token is more powerful, but it's only ever sent to one endpoint, and we can cancel
+it from the server side when you log out.
 
 ```mermaid
-erDiagram
-    committees ||--o{ sessions : "has"
-    committees ||--o{ delegates : "contains"
-    sessions ||--o{ attendance_records : "generates"
-    delegates ||--o{ attendance_records : "has"
-    delegates ||--o{ points_awards : "receives"
+sequenceDiagram
+    participant App
+    participant API as MUNDRA
 
-    delegates {
-        int id PK
-        string name
-        int committee_id FK
-    }
-    sessions {
-        int id PK
-        int committee_id FK
-        string name
-        datetime starts_at
-    }
-    attendance_records {
-        int id PK
-        int delegate_id FK
-        int session_id FK
-        string status
-    }
-    points_awards {
-        int id PK
-        int delegate_id FK
-        int points
-        string reason
-        datetime awarded_at
-    }
+    App->>API: POST /login (email, password)
+    API-->>App: access token (10 min) + refresh token (7 days)
+
+    App->>API: GET /delegates/me<br/>Authorization: Bearer <access>
+    API-->>App: 200, your profile
+
+    Note over App,API: ...10 minutes later...
+
+    App->>API: GET /delegates/me<br/>Authorization: Bearer <access>
+    API-->>App: 403, token expired
+
+    App->>API: POST /refresh (refresh token)
+    API-->>App: a fresh access token
+
+    App->>API: POST /logout (refresh token)
+    API-->>App: 200, refresh token cancelled
 ```
 
-The decision worth noticing: attendance is its own table, not a `present: bool` column on
-the delegate. A delegate attends many sessions and a single boolean can't hold that.
-Any time you hear "one X has many Y", Y is its own table with a foreign key back to X.
+### Sending a token by hand
 
-Same logic for points. Each award is a row rather than a `total_points` number, so we can
-answer "who gave these and why" and undo a mistake. A running total can only ever tell you
-how many, and it can never be audited.
+In `curl`, tokens go in a header:
 
-### Step 3: endpoints and permissions
+```bash
+curl http://127.0.0.1:8000/delegates/me \
+  -H "Authorization: Bearer eyJhbGciOi...your-token..."
+```
 
-| Method | Path | Who | Does |
-|---|---|---|---|
-| `GET` | `/sessions/{id}/attendance` | Chair of that committee | The roster to mark |
-| `POST` | `/sessions/{id}/attendance` | Chair of that committee | Submit attendance |
-| `GET` | `/delegates/me/attendance` | Any delegate | Their own record only |
-| `POST` | `/delegates/{id}/points` | Chair of that committee | Award points with a reason |
-| `DELETE` | `/points/{id}` | Chair who awarded it, or admin | Revoke a mistake |
-| `GET` | `/committees/{id}/leaderboard` | Anyone in that committee | Standings |
+To save typing, keep the token in a shell variable for the rest of the session:
 
-| Action | Delegate | Chair | Admin |
-|---|---|---|---|
-| Mark attendance | no | yes, own committee | yes |
-| View own attendance | yes | yes | yes |
-| View others' attendance | no | yes, own committee | yes |
-| Award or revoke points | no | yes, own committee | yes |
+```bash
+export B=http://127.0.0.1:8000
 
-"Own committee" keeps showing up, which is a real constraint. Writing it in the table is
-how you remember to actually implement it, instead of shipping a chair who can mark
-attendance for a committee they don't run.
+export TOKEN=$(curl -s -X POST $B/login \
+  -d "username=ada@munsoc.test&password=password123" \
+  | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
-### Step 4: what I'd build first
+curl $B/delegates/me -H "Authorization: Bearer $TOKEN"
+```
 
-Following the order from section 8: `config.py`, `database.py`, the five tables,
-migration, Pydantic models, then one endpoint (`GET /delegates/me/attendance`, the
-simplest read), then the rest.
+Every `curl` example below assumes `$B` and `$TOKEN` are set like this.
 
-Five tables, six endpoints, one permission rule that repeats. Completely doable, and it
-stayed that small because the questions in step 1 stopped it from ballooning.
+### Look inside a token
 
----
+Copy an access token and paste it into [jwt.io](https://jwt.io). You'll see your email and
+the expiry time sitting there in plain text. Tokens are **signed**, meaning nobody can
+change them without us noticing, but they are **not encrypted**. Never put anything secret
+inside one.
 
-## 10. Your turn
+### The code behind it
 
-Same process, different brief. Do this before writing any code.
+Open `auth.py` and find `get_current_user`. Any route with this in its parameters:
 
-> **The brief:** "After each committee session, delegates should be able to rate their
-> chair out of 5 and leave a comment. Chairs should see how they're doing. But delegates
-> need to feel safe being honest."
+```python
+user: models.Delegate | models.Admin = Depends(get_current_user)
+```
 
-### Part A: design it on paper, about 45 minutes
-
-Give me five things:
-
-1. **A questions list.** At least six things you'd ask before designing. This is the part
-   everyone skips and the part that matters most.
-2. **An entity list** with a one line description of each.
-3. **An ER diagram.** Hand drawn is fine.
-4. **An endpoint table.** Method, path, who can call it, what it does.
-5. **A permission matrix.** Delegate, chair, admin down the side.
-
-The interesting problem here is the anonymity bit. "Delegates need to feel safe" pulls
-against "we can't let one person submit fifty ratings". You have to know who submitted in
-order to enforce one per session, but the chair must never see it. Write two or three
-sentences on how your design handles that. There's more than one good answer, I care that
-you picked one deliberately and can defend it.
-
-### Part B: build it
-
-1. Set it up using the structure and build order from section 8.
-2. Get one endpoint working end to end before writing any others.
-3. Implement the rest of your endpoint table.
-4. Enforce your permission matrix. Every "no" in that table is something you should be
-   able to try in Swagger and watch get rejected.
-
-### You're done when
-
-- [ ] A delegate can submit a rating and cannot submit twice for the same session
-- [ ] A delegate can see their own submissions
-- [ ] A chair sees their average rating and the comments, with no names attached
-- [ ] A chair cannot see another chair's ratings
-- [ ] An admin can see everything
-- [ ] Endpoints return sensible codes: 201 on create, 403 not allowed, 404 missing, 409 duplicate
-- [ ] `.env` is gitignored and `.env.example` exists
-- [ ] Every table came from a migration, not from hand editing the database
-
-### Then look back
-
-When it works, reread your part A design. What did you get wrong? Which entity did you
-miss? Which permission did you not think about until you were halfway through building it?
-
-That gap between the design you wrote and the design you needed is the thing this whole
-doc is trying to shrink. Nobody gets it right first time, I certainly didn't. The goal is
-just to find the gap on paper instead of in production.
+runs `get_current_user` first, before the route's own code. That function reads the token,
+checks it, looks the email up, and hands the route either an `Admin` or a `Delegate`. If
+the token is bad, the route never runs at all. That's what `Depends` means.
 
 ---
 
-## 11. Further reading
+## 7. Every endpoint, explained
 
-- [FastAPI's tutorial](https://fastapi.tiangolo.com/tutorial/). One of the better framework
-  docs out there, work through it in order.
-- [Pydantic docs](https://docs.pydantic.dev/) for anything about validation and shapes.
-- [SQLAlchemy ORM tutorial](https://docs.sqlalchemy.org/en/20/orm/quickstart.html) for when
-  you swap toy storage for a real database.
-- [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html) for migrations.
-- *System Design Interview* by Alex Xu, for when you outgrow "does it work" and start
-  asking "does it work at scale".
+Every endpoint in MUNDRA, grouped the same way Swagger groups them. For each one:
+
+- **Who** can call it: anyone, a logged in delegate, or an admin
+- **Send**: what goes in the request
+- **Try it**: a `curl` you can run (with `$B` and `$TOKEN` set from section 6)
+- **Back**: what a successful response looks like
+- **Errors** worth knowing
+- **Code**: which file to open
+
+A quick key for **Who**:
+
+| Label | Meaning |
+|---|---|
+| Anyone | No login needed |
+| Delegate | Needs a delegate's access token in the header |
+| Admin | Needs an admin's access token |
+| Delegate (self) or Admin | A delegate can only do this to their own record, an admin to anyone's |
+
+---
+
+### 7.1 Status
+
+#### `GET /`
+
+The "are you alive?" check.
+
+- **Who:** Anyone
+- **Try it:** `curl $B/`
+- **Back:** `{"message": "Server is up and running"}`
+- **Code:** `main.py`
+
+#### `GET /static/{filename}`
+
+Serves images from the `static/` folder, like the logo and the schedule pictures. The
+browser is told to cache them for a day.
+
+- **Who:** Anyone
+- **Try it:** open `http://127.0.0.1:8000/static/logo.jpg`
+- **Errors:** `404` if the file doesn't exist
+- **Code:** `main.py`
+
+---
+
+### 7.2 Auth
+
+#### `POST /register`
+
+Creates a normal (non Mumbai MUN) account and emails a verification link.
+
+- **Who:** Anyone
+- **Send:** JSON body. Password must be at least 8 characters.
+  ```json
+  {"firstname": "Ada", "lastname": "Lovelace", "email": "ada@munsoc.test", "password": "password123"}
+  ```
+- **Try it:**
+  ```bash
+  curl -X POST $B/register -H "Content-Type: application/json" \
+    -d '{"firstname":"Ada","lastname":"Lovelace","email":"ada@munsoc.test","password":"password123"}'
+  ```
+- **Back:** `201` with `{"message": "User created successfully. Please verify your email."}`
+- **Errors:** `409` if the email already has an account. `422` if a field is missing or the
+  password is too short. `500` locally because email can't send (the account is still made).
+- **Rate limit:** 10 per minute per IP
+- **Code:** `routers/auth.py`
+
+What happens inside: if there's already a delegate record for that email (say an admin
+pre registered them) we reuse it, otherwise we create one. Then we create the login and
+send the email. The new delegate starts **unverified** and can't use padlocked endpoints
+until they click the link.
+
+#### `POST /login`
+
+Swaps an email and password for tokens.
+
+- **Who:** Anyone
+- **Send:** a **form**, not JSON. The email goes in a field called `username`.
+- **Try it:**
+  ```bash
+  curl -X POST $B/login -d "username=ada@munsoc.test&password=password123"
+  ```
+- **Back:**
+  ```json
+  {
+    "access_token": "eyJhbGciOi...",
+    "refresh_token": "eyJhbGciOi...",
+    "token_type": "bearer",
+    "user_type": "user"
+  }
+  ```
+  `user_type` is `"admin"` or `"user"`.
+- **Errors:** `401` with `"Invalid email"` or `"Invalid password"`
+- **Rate limit:** 10 per minute
+- **Code:** `routers/auth.py`
+
+It checks the `admins` table first and the `users` table second, so an email that exists in
+both logs in as an admin.
+
+#### `POST /refresh`
+
+Gets a new access token using your refresh token.
+
+- **Who:** Anyone holding a valid refresh token
+- **Send:** `{"refresh_token": "eyJhbGciOi..."}`
+- **Try it:**
+  ```bash
+  curl -X POST $B/refresh -H "Content-Type: application/json" \
+    -d '{"refresh_token":"PASTE_REFRESH_TOKEN"}'
+  ```
+- **Back:** the same shape as `/login`. The access token is new, the refresh token is the
+  same one you sent.
+- **Errors:** `401` if the refresh token is fake, expired, logged out, or is actually an
+  access token
+- **Rate limit:** 10 per minute
+- **Code:** `routers/auth.py`
+
+#### `POST /logout`
+
+Cancels a refresh token so it can never be used again.
+
+- **Who:** Anyone
+- **Send:** `{"refresh_token": "eyJhbGciOi..."}`
+- **Try it:**
+  ```bash
+  curl -X POST $B/logout -H "Content-Type: application/json" \
+    -d '{"refresh_token":"PASTE_REFRESH_TOKEN"}'
+  ```
+- **Back:** `{"message": "Logged out successfully"}`
+- **Code:** `routers/auth.py`
+
+Try `/refresh` with the same token afterwards and watch it get refused. The access token you
+already had keeps working until its 10 minutes are up. That's normal, and it's one reason
+access tokens are kept short.
+
+#### `GET /verify_email?token=...`
+
+The link inside the verification email. Clicking it marks the delegate as verified.
+
+- **Who:** Anyone with the link
+- **Send:** `token` as a query parameter
+- **Back:** `{"message": "Email verified!"}`
+- **Errors:** `401` if the link has expired (2 hours by default), `403` if the token is invalid
+- **Rate limit:** 10 per minute
+- **Code:** `routers/auth.py`
+
+Locally you won't get the email, so use `POST /manual_verify` instead (section 7.6).
+
+#### `GET /resend_verification?email=...`
+
+Sends the verification email again.
+
+- **Who:** Anyone
+- **Try it:** `curl "$B/resend_verification?email=ada@munsoc.test"`
+- **Back:** `{"message": "Verification email sent!"}`
+- **Errors:** `404` if no delegate has that email, `409` if they're already verified,
+  `500` locally because email can't send
+- **Rate limit:** 10 per minute
+- **Code:** `routers/auth.py`
+
+#### `GET /forgot_password?email=...`
+
+Emails a link to reset your password.
+
+- **Who:** Anyone
+- **Try it:** `curl "$B/forgot_password?email=ada@munsoc.test"`
+- **Back:** `{"message": "Password reset email sent!"}`
+- **Errors:** `404` if the email isn't found, `403` if the account isn't verified yet
+- **Rate limit:** **1 per minute**, so don't be surprised by a `429` if you try it twice
+- **Code:** `routers/auth.py`
+
+#### `GET /reset?token=...`
+
+The page that link opens. It's an HTML page from `templates/reset.html`, not JSON.
+
+- **Who:** Anyone with a valid token in the link
+- **Code:** `routers/auth.py`
+
+#### `PATCH /change_pass?password=...`
+
+Changes the logged in delegate's password.
+
+- **Who:** Delegate (admins get a `403`)
+- **Send:** the new password as a query parameter
+- **Try it:**
+  ```bash
+  curl -X PATCH "$B/change_pass?password=newpassword123" -H "Authorization: Bearer $TOKEN"
+  ```
+- **Back:** `{"message": "Password changed!"}`
+- **Rate limit:** **1 per minute**
+- **Code:** `routers/auth.py`
+
+#### `DELETE /account`
+
+Deletes the logged in delegate's login.
+
+- **Who:** Delegate
+- **Try it:** `curl -X DELETE $B/account -H "Authorization: Bearer $TOKEN"`
+- **Back:** `{"message": "Account deleted successfully"}`
+- **Errors:** `500` with `"You are an admin"` if an admin calls it
+- **Code:** `routers/auth.py`
+
+This only deletes the **login**. The delegate record and their conference registration
+stay. That's deliberate: someone can delete their account without us losing the fact that
+they attended. After this, logging in gives `401 Invalid email`.
+
+---
+
+### 7.3 Delegates
+
+#### `GET /delegates/me`
+
+Your own profile. This is what the Delego app calls right after login.
+
+- **Who:** Delegate
+- **Try it:** `curl $B/delegates/me -H "Authorization: Bearer $TOKEN"`
+- **Back:**
+  ```json
+  {
+    "id": "896314eac2024436b9d64160e045cbf7",
+    "firstname": "Ada",
+    "lastname": "Lovelace",
+    "email": "ada@munsoc.test",
+    "contact": "",
+    "dateofbirth": "",
+    "gender": "",
+    "pastmuns": [],
+    "verified": true
+  }
+  ```
+- **Errors:** `401` with `"Please verify your email!"` if unverified. `500` with
+  `"You are an admin"` if an admin calls it.
+- **Code:** `routers/delegates.py`
+
+Copy your `id` from here, the next few endpoints need it:
+
+```bash
+export ID=paste-your-id-here
+```
+
+#### `GET /delegates/{id}`
+
+One delegate by id.
+
+- **Who:** Delegate (self) or Admin
+- **Try it:** `curl $B/delegates/$ID -H "Authorization: Bearer $TOKEN"`
+- **Back:** same shape as `/delegates/me`
+- **Errors:** `403` if a delegate asks for someone else, `404` if an admin asks for an id
+  that doesn't exist
+- **Code:** `routers/delegates.py`
+
+#### `PATCH /delegates/{id}`
+
+Edits a delegate's profile. The Delego profile screen uses this.
+
+- **Who:** Delegate (self) or Admin
+- **Send:** any of these as **query parameters**: `firstname`, `lastname`, `contact`,
+  `dateofbirth`, `gender`, `verified`. Anything you leave out stays as it is. To replace
+  someone's past MUN list, also send a **JSON body**:
+  ```json
+  [
+    {"name": "HarvardMUN", "committee": "UNSC", "delegation": "India", "year": 2024, "award": "Best Delegate"}
+  ]
+  ```
+- **Try it:**
+  ```bash
+  # just a field
+  curl -X PATCH "$B/delegates/$ID?contact=9876543210" -H "Authorization: Bearer $TOKEN"
+
+  # a value with spaces has to be encoded, %20 is a space
+  curl -X PATCH "$B/delegates/$ID?gender=Prefer%20not%20to%20say" -H "Authorization: Bearer $TOKEN"
+
+  # past MUNs
+  curl -X PATCH "$B/delegates/$ID" -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '[{"name":"HarvardMUN","committee":"UNSC","delegation":"India","year":2024,"award":"Best Delegate"}]'
+  ```
+- **Back:** the updated profile
+- **Errors:** `403` if a delegate edits someone else, `404` if the id doesn't exist
+- **Code:** `routers/delegates.py`
+
+Two quirks. An empty value means "don't change it", so there's no way to clear a field back
+to blank. And sending `pastmuns` replaces the whole list, it doesn't add to it.
+
+#### `GET /delegates?token=...&format=...`
+
+Every delegate. Add `format=csv` for a spreadsheet.
+
+- **Who:** Admin
+- **Send:** the admin token as a **query parameter** called `token`. This is the one route
+  that doesn't use the header, so the Swagger padlock won't help you here, paste the token
+  into the `token` box yourself.
+- **Try it:**
+  ```bash
+  curl "$B/delegates?token=$ADMIN_TOKEN"
+  curl "$B/delegates?token=$ADMIN_TOKEN&format=csv" -o delegates.csv
+  ```
+- **Back:** a list of delegates, or a CSV file
+- **Errors:** `403` if the token isn't an admin's, `404` if there are no delegates yet
+- **Code:** `routers/delegates.py`
+
+(Get `$ADMIN_TOKEN` the same way as `$TOKEN` in section 6, but log in as the admin.)
+
+---
+
+### 7.4 Mumbai MUN
+
+#### `POST /mumbaimun/register`
+
+Registers someone for Mumbai MUN. **This is the signup the Delego app actually uses.**
+
+- **Who:** Anyone
+- **Send:** the same JSON as `/register`
+- **Try it:**
+  ```bash
+  curl -X POST $B/mumbaimun/register -H "Content-Type: application/json" \
+    -d '{"firstname":"Grace","lastname":"Hopper","email":"grace@munsoc.test","password":"password123"}'
+  ```
+- **Back:** `201`, with one of these messages:
+  - brand new person: `"User with id <id> created successfully!"`
+  - already had an account: `"Mumbai MUN Delegate registered successfully! ID: <id>"`
+- **Errors:** `409` if they're already registered for Mumbai MUN, `400` if a login exists
+  with no delegate record, `500` locally from the email step
+- **Code:** `routers/mumbaimun.py`
+
+This one is different from `/register` in a few ways. It marks the person as **verified
+straight away**, so they can log in without clicking an email. It also creates a row in
+`mm_delegates` with the **same id** as their normal delegate record, which is where their
+country, committee and meal ticks live.
+
+#### `GET /mumbaimun/delegates?format=...`
+
+Every Mumbai MUN delegate, including country, committee and all nine meal flags.
+
+- **Who:** Admin
+- **Try it:**
+  ```bash
+  curl $B/mumbaimun/delegates -H "Authorization: Bearer $ADMIN_TOKEN"
+  curl "$B/mumbaimun/delegates?format=csv" -H "Authorization: Bearer $ADMIN_TOKEN" -o mm.csv
+  ```
+- **Errors:** `403` if not an admin, `404` if nobody is registered yet
+- **Code:** `routers/mumbaimun.py`
+
+---
+
+### 7.5 QR codes and food
+
+These are what volunteers use on conference day. The flow is: a delegate shows the QR code
+in their app, a volunteer scans it on `/scan`, which opens `/food` for that delegate, and
+the volunteer ticks the meal.
+
+#### `GET /qr?id=...`
+
+A delegate's QR code as a JPEG image. The QR code simply contains their id.
+
+- **Who:** Anyone
+- **Try it:** open `http://127.0.0.1:8000/qr?id=YOUR_ID` in the browser
+- **Code:** `routers/qr.py`
+
+The first time you ask for an id, the image gets generated and saved in `qrcodes/`. After
+that it's served from the saved file.
+
+#### `GET /scan`
+
+The camera scanner page volunteers open on their phones. It's HTML.
+
+- **Who:** Anyone
+- **Try it:** open `http://127.0.0.1:8000/scan`
+- **Code:** `routers/qr.py`, page in `templates/scan.html`
+
+#### `GET /food?id=...`
+
+The meal checklist page for one Mumbai MUN delegate. HTML.
+
+- **Who:** Anyone
+- **Try it:** open `http://127.0.0.1:8000/food?id=YOUR_ID` (must be someone registered
+  through `/mumbaimun/register`)
+- **Errors:** `404` if that id isn't a Mumbai MUN delegate
+- **Code:** `routers/food.py`, page in `templates/food.html`
+
+#### `POST /food`
+
+What the checklist page submits.
+
+- **Who:** Anyone. Yes really, see section 10.
+- **Send:** a **form** with `id` plus any of the nine meal fields: `d1_bf`, `d1_lunch`,
+  `d1_hitea`, `d2_bf`, `d2_lunch`, `d2_hitea`, `d3_bf`, `d3_lunch`, `d3_hitea`
+  (`d1_bf` = day 1 breakfast, `hitea` = high tea)
+- **Try it:**
+  ```bash
+  curl -X POST $B/food -d "id=$ID&d1_bf=true&d1_lunch=true"
+  ```
+- **Back:** `201` with `{"message": "Food updated successfully"}`
+- **Code:** `routers/food.py`
+
+Careful: this sets **all nine** every time. Any meal you don't send goes back to its default
+(false, except day 1 breakfast which defaults to true). That matches how HTML checkboxes
+work, the page always sends the whole form.
+
+---
+
+### 7.6 Admin and OC
+
+#### `GET /hash_password?password=...`
+
+Turns a password into the scrambled form we store. Only really used to create admins by
+hand (section 5.2).
+
+- **Who:** Anyone
+- **Try it:** `curl "$B/hash_password?password=adminpass123"`
+- **Back:** a string like `"$2b$12$HINBo6Zk..."`. Run it twice and you get two different
+  strings. That's normal, each hash gets its own random salt.
+- **Code:** `routers/admin.py`
+
+#### `GET /backup`
+
+Downloads a full copy of the database as a zip.
+
+- **Who:** Admin
+- **Try it:**
+  ```bash
+  curl $B/backup -H "Authorization: Bearer $ADMIN_TOKEN" -o backup.zip
+  ```
+- **Errors:** `403` if not an admin. `500` if `pg_dump` isn't installed on the machine.
+- **Code:** `routers/admin.py`
+
+#### `POST /manual_verify?email=...`
+
+Marks a delegate as verified without the email. Your best friend on a laptop with no mail
+server.
+
+- **Who:** Anyone (see section 10)
+- **Try it:** `curl -X POST "$B/manual_verify?email=ada@munsoc.test"`
+- **Back:** `201` with `{"message": "Email verified!"}`
+- **Errors:** `404` if no delegate has that email
+- **Code:** `routers/admin.py`
+
+---
+
+### 7.7 Dynamic data
+
+These serve JSON files straight from the `data/` folder, so we can change rooms and the
+schedule without touching code.
+
+#### `GET /rooms`
+
+Which room each committee is in.
+
+- **Who:** Anyone
+- **Try it:** `curl $B/rooms`
+- **Back:**
+  ```json
+  [
+    {"id": "jcc_western_1", "committee_name": "JCC - Western Bloc", "room_code": "CR 404", "floor": "Floor 4"}
+  ]
+  ```
+- **Code:** `routers/dynamic_data.py`, data in `data/rooms.json`
+
+#### `GET /schedule`
+
+The conference days and every event.
+
+- **Who:** Anyone
+- **Try it:** `curl $B/schedule`
+- **Back:**
+  ```json
+  {
+    "conference_days": [{"day_key": "Day 1", "display_date": "November 7, 2025"}],
+    "events": [
+      {"id": "1", "day": "Day 1", "name": "Registration Desk", "location": "MPSTME Main Gate",
+       "time": "9:00 - 10:30 AM", "description": "...", "image": "https://..."}
+    ]
+  }
+  ```
+- **Code:** `routers/dynamic_data.py`, data in `data/schedule.json`
+
+Both of these are cached in memory the first time they're read. **If you edit the JSON
+file, restart the server** or you'll keep seeing the old version.
+
+---
+
+## 8. One full story: signup to lunch
+
+Now tie it together. This is what really happens across a conference, in order. Do every
+step yourself in Swagger or `curl`.
+
+1. **Grace signs up in the app.**
+   `POST /mumbaimun/register` with her details. (Locally, ignore the `500` from email.)
+
+2. **Grace logs in.**
+   `POST /login` gives her an access token and a refresh token.
+
+3. **The app loads her profile.**
+   `GET /delegates/me` with her access token. The app saves her `id`.
+
+4. **She fills in her profile.**
+   `PATCH /delegates/{id}?contact=...&gender=...`
+
+5. **The app shows her QR code.**
+   `GET /qr?id=<her id>`
+
+6. **She checks where her committee is and what's on.**
+   `GET /rooms` and `GET /schedule`
+
+7. **Ten minutes pass and her token expires.**
+   Her next `GET /delegates/me` gets a `403`. The app calls `POST /refresh` and retries.
+
+8. **Lunch on day one.**
+   A volunteer opens `/scan`, scans Grace's code, lands on `/food?id=<her id>`, ticks
+   lunch, and the page sends `POST /food`.
+
+9. **The OC checks numbers.**
+   An admin calls `GET /mumbaimun/delegates?format=csv` and sees Grace's `d1_lunch` is `true`.
+
+10. **After the conference, she logs out.**
+    `POST /logout` with her refresh token.
+
+If you can do all ten without looking at this list, you understand MUNDRA.
+
+---
+
+## 9. Exercises on the real code
+
+Make a branch before you start so you never break `master`:
+
+```bash
+git checkout -b yourname/exercises
+```
+
+### Exercise 1: add a ping endpoint (15 minutes)
+
+Add `GET /ping` that returns `{"pong": true}`. Put it in `routers/dynamic_data.py`.
+
+- Does it need a prefix? Look at how `dynamic_data_router` is included in `main.py`.
+- Check it shows up in Swagger under Dynamic Data.
+
+### Exercise 2: filter rooms by floor (30 minutes)
+
+Make `GET /rooms?floor=Floor 4` return only the rooms on that floor. With no `floor`, it
+should return everything like before.
+
+Hints:
+- Add `floor: str = ""` to the function's parameters. That's all it takes to make a query
+  parameter.
+- `read_rooms_data()` gives you a list of dicts. Filter it with a list comprehension.
+- Remember the space in `Floor 4` needs to be `Floor%204` in a `curl` URL. Swagger encodes
+  it for you.
+
+### Exercise 3: count delegates, and hit a real bug on purpose (45 minutes)
+
+Add `GET /delegates/count`, admin only, returning `{"count": <number>}`.
+
+1. Add the function to `database.py` first. Look at how `get_delegates` works.
+2. Add the route in `routers/delegates.py`, **at the bottom of the file**.
+3. Call it as an admin.
+
+It won't work. You'll get a `404 Delegate not found`. Before reading on, try to work out why.
+
+<details>
+<summary>Why it breaks</summary>
+
+FastAPI checks routes in the order they're written. `@router.get("/{id}")` is higher up
+in the file, and `{id}` matches anything, including the word `count`. So your request is
+being handled by `get_delegate_by_id` with `id="count"`, which obviously doesn't exist.
+
+Fix it by moving your route **above** `@router.get("/{id}")`. This is exactly why
+`/me` sits above `/{id}` in that file.
+
+</details>
+
+### Exercise 4: trace a request (20 minutes, no code)
+
+Pick `PATCH /delegates/{id}`. On paper, write down every file and every function a
+request passes through, from the moment it arrives until the response goes back. Include
+`get_current_user`. Then check yourself by reading the code.
+
+### When you're done
+
+```bash
+git add -A
+git commit -m "Exercises: ping, room filter, delegate count"
+git push -u origin yourname/exercises
+```
+
+Open a pull request and tag me. I'll review it like any other PR.
+
+---
+
+## 10. When things break
+
+| You see | What's going on | Fix |
+|---|---|---|
+| `pg_isready` says `no response` | Postgres isn't running | Section 2.2 |
+| `connection refused` on port 5432 | Same thing | Section 2.2 |
+| `role "user" does not exist` | `DATABASE_URL` still has the example username | Put your real Postgres username in `.env` (section 2.4) |
+| `database "mundra" does not exist` | You skipped `createdb` | `createdb mundra` |
+| `Field required ... mail_server` | `.env` missing, or run from the wrong folder | Run commands from inside `mundra/`, check `.env` exists |
+| `relation "delegates" does not exist` | Tables were never created | `uv run alembic upgrade head` |
+| `uv sync` complains about the Python version | Your shell has `UV_PYTHON` set to something else | `echo $UV_PYTHON`, then `UV_PYTHON=3.12 uv sync` |
+| `500 ... Error connecting to localhost on port 465` | No mail server on your laptop. The account was still created. | Ignore it, then `POST /manual_verify?email=...` |
+| `401 Please verify your email!` | Account exists but isn't verified | `POST /manual_verify?email=...` |
+| `403 Could not validate credentials` | Token is wrong or has expired (10 min) | Log in again, or Authorize again in Swagger |
+| `401 Not authenticated` | You didn't send a token at all | Add the header, or Authorize in Swagger |
+| `403 Forbidden` on `/delegates` | Token isn't an admin's, or you sent it as a header | That route wants `?token=` in the URL |
+| `422 Unprocessable Entity` | Your request has the wrong shape | Read the response, it names the exact field |
+| `429 Too Many Requests` | Rate limit on login, password reset etc. | Wait a minute |
+| Swagger page is blank or 404 | `DOCS_URL` is blank or missing | Set `DOCS_URL=/swagger` in `.env` |
+| Edited `rooms.json` but nothing changed | It's cached in memory | Restart the server |
+| Added a column to `db_models.py` but Postgres didn't change | Models don't change the database by themselves | `uv run alembic revision --autogenerate -m "what changed"` then `uv run alembic upgrade head` |
+
+### Things in MUNDRA that aren't right yet
+
+I'd rather you know about these than trip over them. They're all fair game as future tasks.
+
+- **`POST /food`, `POST /manual_verify` and `GET /hash_password` have no login check.**
+  Anyone who can reach the server can use them. Two have comments in the code admitting it.
+- **An expired token gives `403`, not `401`.** `401` would be more correct and would make
+  the app's life easier.
+- **Password reset links now expire in 10 minutes**, because they reuse the access token,
+  and access tokens got shorter. That's probably too short for an email.
+- **`/change_pass` doesn't check the 8 character minimum** that signup does.
+- **Registration isn't all or nothing.** If the email fails, the account is already made
+  but the caller sees an error.
+- **The Delego app doesn't use refresh tokens yet**, so it'll start failing after 10
+  minutes until we update it.
+- **There are no automated tests.** "The server started" is not proof that anything works.
+
+---
+
+## 11. Cheat sheet
+
+### Commands
+
+```bash
+uv sync                                   # install packages
+uv run fastapi dev main.py                # run the server
+uv run alembic upgrade head               # build or update tables
+uv run alembic revision --autogenerate -m "message"   # after changing db_models.py
+psql mundra                               # poke at the database
+psql mundra -c "\dt"                      # list tables
+```
+
+### Every endpoint on one screen
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/` | Anyone | Health check |
+| GET | `/static/{filename}` | Anyone | Images |
+| POST | `/register` | Anyone | Normal signup |
+| POST | `/login` | Anyone | Email + password to tokens (form) |
+| POST | `/refresh` | Refresh token | New access token |
+| POST | `/logout` | Refresh token | Cancel refresh token |
+| GET | `/verify_email` | Link | Verify email |
+| GET | `/resend_verification` | Anyone | Resend verification email |
+| GET | `/forgot_password` | Anyone | Send reset email |
+| GET | `/reset` | Link | Reset password page |
+| PATCH | `/change_pass` | Delegate | Change password |
+| DELETE | `/account` | Delegate | Delete login |
+| GET | `/delegates/me` | Delegate | My profile |
+| GET | `/delegates/{id}` | Self or Admin | One profile |
+| PATCH | `/delegates/{id}` | Self or Admin | Edit profile |
+| GET | `/delegates` | Admin (`?token=`) | All delegates, JSON or CSV |
+| POST | `/mumbaimun/register` | Anyone | Mumbai MUN signup |
+| GET | `/mumbaimun/delegates` | Admin | All MM delegates, JSON or CSV |
+| GET | `/qr` | Anyone | QR code image |
+| GET | `/scan` | Anyone | Scanner page |
+| GET | `/food` | Anyone | Meal checklist page |
+| POST | `/food` | Anyone | Save meal ticks (form) |
+| GET | `/hash_password` | Anyone | Hash a password |
+| GET | `/backup` | Admin | Database backup zip |
+| POST | `/manual_verify` | Anyone | Verify without email |
+| GET | `/rooms` | Anyone | Committee rooms |
+| GET | `/schedule` | Anyone | Conference schedule |
+
+### Where to look
+
+| I want to change... | Open |
+|---|---|
+| An endpoint | `routers/<area>.py` |
+| Which routers exist, or their prefix | `main.py` |
+| What a request or response looks like | `models.py` |
+| A table | `db_models.py`, then make a migration |
+| How data is read or saved | `database.py` |
+| Login, tokens, passwords | `auth.py` |
+| A setting | `.env` and `config.py` |
+
+That's Part 2. Once you've finished section 9, you're ready for real tasks on MUNDRA.
